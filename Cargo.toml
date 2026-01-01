@@ -25,7 +25,7 @@ imgref = "1.10"
 rgb = "0.8"
 
 # Reference implementations (for comparison and fallback)
-mozjpeg-oxide = { path = "../mozjpeg-rs" }
+mozjpeg-oxide = { path = "../mozjpeg-rs", package = "mozjpeg-rs" }
 jpegli = { path = "../jpegli-rs/jpegli-rs", package = "jpegli-rs" }
 
 # FFI bindings to C++ jpegli (optional, for verification tests)
