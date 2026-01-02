@@ -57,6 +57,15 @@ mod trellis;
 // Strategy selection
 mod strategy;
 
+// BPP and SSIM2 mapping tables
+pub mod bpp_mapping;
+
+// Runtime-configurable adaptive features
+pub mod adaptive_config;
+
+// Unified monotonic quality scale
+pub mod unified_quality;
+
 // Note: jpegli encoding is now delegated to the jpegli-rs crate dependency
 
 // Public API

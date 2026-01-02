@@ -329,8 +329,20 @@ impl Encoder {
             encoder = encoder.progressive(true);
         }
 
-        // Subsampling
-        encoder = encoder.subsampling(match self.subsampling {
+        // Subsampling: use evalchroma to analyze image content (like imageflow does)
+        // This adapts subsampling based on chroma complexity, upgrading to 4:4:4 for
+        // images with significant chroma detail
+        let subsampling = if self.subsampling == Subsampling::S444 {
+            // User explicitly requested no subsampling - respect that
+            Subsampling::S444
+        } else {
+            // Use evalchroma to determine optimal subsampling
+            let (recommended, _chroma_q, _sharpness) =
+                crate::analysis::evaluate_chroma_subsampling(pixels, width, height, q as f32);
+            recommended
+        };
+
+        encoder = encoder.subsampling(match subsampling {
             Subsampling::S444 => mozjpeg_oxide::Subsampling::S444,
             Subsampling::S422 => mozjpeg_oxide::Subsampling::S422,
             Subsampling::S420 => mozjpeg_oxide::Subsampling::S420,

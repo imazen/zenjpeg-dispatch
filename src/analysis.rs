@@ -3,9 +3,80 @@
 //! Uses evalchroma for chroma analysis and adds luma analysis
 //! to decide between trellis (mozjpeg) and adaptive quantization (jpegli).
 
+use crate::types::Subsampling;
 use evalchroma::{adjust_sampling, ChromaEvaluation, PixelSize, Sharpness};
 use imgref::ImgRef;
 use rgb::RGB8;
+
+/// Evaluate chroma subsampling for an image using evalchroma.
+///
+/// This analyzes the image content to determine the optimal chroma subsampling,
+/// following the same approach as imageflow. The function returns:
+/// - The recommended Subsampling mode
+/// - The adjusted chroma quality (may be lower than input if image can tolerate it)
+/// - The sharpness score (for diagnostics)
+///
+/// # Arguments
+/// * `pixels` - RGB8 pixel data (3 bytes per pixel)
+/// * `width` - Image width
+/// * `height` - Image height
+/// * `quality` - JPEG quality (1-100), used to determine acceptable chroma loss
+///
+/// # Returns
+/// `(Subsampling, chroma_quality, Option<Sharpness>)`
+pub fn evaluate_chroma_subsampling(
+    pixels: &[u8],
+    width: usize,
+    height: usize,
+    quality: f32,
+) -> (Subsampling, f32, Option<Sharpness>) {
+    // Convert to RGB8 slice for evalchroma
+    let rgb_pixels: Vec<RGB8> = pixels
+        .chunks_exact(3)
+        .map(|c| RGB8::new(c[0], c[1], c[2]))
+        .collect();
+
+    let img = ImgRef::new(&rgb_pixels, width, height);
+
+    // Start with 4:2:0 as worst allowed, let evalchroma upgrade if needed
+    let max_sampling = PixelSize {
+        cb: (2, 2),
+        cr: (2, 2),
+    };
+
+    let result = adjust_sampling(img, max_sampling, quality);
+
+    // Map evalchroma's PixelSize to our Subsampling enum
+    let subsampling = pixel_size_to_subsampling(&result.subsampling);
+
+    (subsampling, result.chroma_quality, result.sharpness)
+}
+
+/// Convert evalchroma's PixelSize to our Subsampling enum.
+///
+/// evalchroma returns per-channel subsampling as (h, v) factors where:
+/// - (1, 1) = no subsampling (full resolution)
+/// - (2, 1) = horizontal subsampling only
+/// - (1, 2) = vertical subsampling only
+/// - (2, 2) = both horizontal and vertical
+///
+/// We map to the closest standard JPEG subsampling mode:
+/// - S444 = no subsampling
+/// - S422 = horizontal only
+/// - S420 = both directions
+fn pixel_size_to_subsampling(ps: &PixelSize) -> Subsampling {
+    // Use the maximum subsampling from both Cb and Cr channels
+    let max_h = ps.cb.0.max(ps.cr.0);
+    let max_v = ps.cb.1.max(ps.cr.1);
+
+    match (max_h, max_v) {
+        (1, 1) => Subsampling::S444, // No subsampling
+        (2, 1) => Subsampling::S422, // Horizontal only
+        (1, 2) => Subsampling::S422, // Vertical only (map to 4:2:2)
+        (2, 2) => Subsampling::S420, // Both directions
+        _ => Subsampling::S420,       // Default to 4:2:0 for unknown
+    }
+}
 
 /// Image characteristics used to select encoding strategy
 #[derive(Debug, Clone)]
