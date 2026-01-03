@@ -322,7 +322,8 @@ impl Encoder {
         let use_deringing = crate::analysis::should_use_deringing(pixels, width, height);
 
         // Map our settings to mozjpeg-oxide settings
-        let mut encoder = mozjpeg_oxide::Encoder::new().quality(q);
+        let mut encoder =
+            mozjpeg_oxide::Encoder::new(mozjpeg_oxide::Preset::ProgressiveBalanced).quality(q);
 
         // Progressive encoding
         if self.progressive == Some(true) {
@@ -529,7 +530,8 @@ impl Encoder {
     ) -> Result<Vec<u8>> {
         let q = self.quality.value() as u8;
 
-        let mut encoder = mozjpeg_oxide::Encoder::new().quality(q);
+        let mut encoder =
+            mozjpeg_oxide::Encoder::new(mozjpeg_oxide::Preset::ProgressiveBalanced).quality(q);
 
         if self.progressive == Some(true) {
             encoder = encoder.progressive(true);

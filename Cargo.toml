@@ -56,6 +56,18 @@ libc = "0.2"
 
 # C mozjpeg for comparison
 mozjpeg-sys = "2.0"
+mozjpeg = "0.10"
+
+# Sharp YUV chroma subsampling
+yuv = "0.8"
+
+# CLI and hashing for benchmark infrastructure
+clap = { version = "4.4", features = ["derive"] }
+sha2 = "0.10"
+hex = "0.4"
+csv = "1.3"
+chrono = { version = "0.4", features = ["serde"] }
+rayon = "1.8"
 
 # Benchmarks (uncomment when benches/ directory is created)
 # [[bench]]
