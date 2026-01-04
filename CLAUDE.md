@@ -56,7 +56,7 @@ zenjpeg/
 - [x] 36 unit/integration tests passing
 - [x] Pareto benchmark (`examples/pareto_benchmark.rs`)
 
-### Current Performance (Dec 2024)
+### Current Performance (Jan 2026)
 At SSIM2 >= 80 quality target:
 - jpegli: **1.310 bpp** (best efficiency)
 - mozjpeg-oxide: 1.437 bpp
@@ -65,6 +65,20 @@ At SSIM2 >= 80 quality target:
 zenjpeg appears on Pareto front at multiple quality levels:
 - Low quality: Q30 at 0.485 bpp
 - Very high quality: Q90-Q95 at SSIM2 86-91 (outperforms jpegli at similar bitrates)
+
+### Codec Selection by Metric (Jan 2026 Benchmark)
+Based on 150,000 encodings (336 images × 6 configs × 100 quality levels):
+
+| Metric | Best Codec | Mean Regret | Notes |
+|--------|------------|-------------|-------|
+| **SSIMULACRA2** | jpegli-420 | 3.87% | Dominates at all Z levels |
+| **Butteraugli** | jpegli-420 | 4.93% | Strongly dominates (50-60% wins) |
+| **DSSIM** | mozjpeg-max-420 | **1.01%** | Progressive encoding helps! |
+
+**Key Finding**: For DSSIM optimization, mozjpeg's `max_compression()` mode (progressive + optimize_scans) significantly outperforms baseline mozjpeg:
+- mozjpeg-max-420: 1.01% mean regret (best)
+- mozjpeg-420 baseline: 1.75% mean regret
+- At Z≥55 (high quality): mozjpeg-max wins 41-61% of images
 
 ### Key Improvements Made
 1. **Two-pass Huffman optimization**: Proper frequency counting with Huffman's algorithm
@@ -104,6 +118,14 @@ Three implementations ready to port:
 - Simplified variance-based AQ hurts quality - needs full jpegli perceptual AQ port
 - Trellis disabled at Q>=80 to prevent quality degradation
 - 11% larger than jpegli at SSIM2>=80 (gap requires perceptual AQ to close)
+
+### Simulated Annealing Tables Evaluation (Jan 2026)
+
+**Evaluated**: Harvard SA quantization tables (optimized for FSIM metric)
+**Result**: Not worth integrating - only SA Q95 shows improvement (+1.67 SSIM2 at Q47-48), but worse on Butteraugli/DSSIM
+**Decision**: Skip Harvard tables, but may design custom SA tables optimized for SSIMULACRA2/Butteraugli in future
+
+See `SA_TABLES_EVALUATION.md` for full analysis and potential future work.
 
 ## Key Design Decisions
 
