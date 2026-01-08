@@ -356,9 +356,11 @@ const ASSERT_UNCHANGED: bool = true; // Keep true until code is committed
 #[command(name = "discover_heuristics")]
 #[command(about = "Benchmark codec configurations to discover optimal heuristics")]
 struct Args {
-    /// Path to corpus directory containing PNG images
-    #[arg(long)]
-    corpus: PathBuf,
+    /// Path(s) to corpus directories containing PNG images.
+    /// Can specify multiple: --corpus path1 --corpus path2
+    /// Known corpora: kodak (24), CID22 (250), clic2025 (62)
+    #[arg(long, required = true)]
+    corpus: Vec<PathBuf>,
 
     /// Output directory for cache and results
     #[arg(long)]
@@ -2127,6 +2129,32 @@ struct WinnerCharacteristics {
     image_count: usize,
 }
 
+/// Get the current version for each config key.
+/// This must be kept in sync with Config::version_info().
+fn get_current_config_versions() -> HashMap<String, u32> {
+    let mut versions = HashMap::new();
+    // MozJpeg configs - v5
+    for sub in ["420", "422", "444", "auto"] {
+        versions.insert(format!("mozjpeg-{}", sub), 5);
+        versions.insert(format!("mozjpeg-max-{}", sub), 5);
+    }
+    // C mozjpeg configs - v3
+    for sub in ["420", "422", "444", "auto"] {
+        versions.insert(format!("cmozjpeg-{}", sub), 3);
+        versions.insert(format!("cmozjpeg-max-{}", sub), 3);
+    }
+    // Jpegli configs - v5
+    for sub in ["420", "422", "444", "auto"] {
+        versions.insert(format!("jpegli-{}", sub), 5);
+        versions.insert(format!("jpegli-xyb-{}", sub), 5);
+    }
+    // Zenjpeg - v1
+    for sub in ["420", "422", "444", "auto"] {
+        versions.insert(format!("zenjpeg-{}", sub), 1);
+    }
+    versions
+}
+
 fn run_aggregated_analysis(output_dir: &Path) -> Result<(), String> {
     let csv_path = output_dir.join("results.csv");
     if !csv_path.exists() {
@@ -2162,11 +2190,26 @@ fn run_aggregated_analysis(output_dir: &Path) -> Result<(), String> {
             })
             .or_insert(row);
     }
-    let rows: Vec<CsvRow> = deduped.into_values().collect();
+
+    // Filter to only include rows with current version for each config
+    let current_versions = get_current_config_versions();
+    let before_filter = deduped.len();
+    let rows: Vec<CsvRow> = deduped
+        .into_values()
+        .filter(|row| {
+            current_versions
+                .get(&row.config_key)
+                .map(|&v| row.cache_version == v)
+                .unwrap_or(false) // Exclude unknown configs
+        })
+        .collect();
+    let filtered_out = before_filter - rows.len();
 
     println!(
-        "Loaded {} unique encoding results (after deduplication)",
-        rows.len()
+        "Loaded {} encoding results ({} deduped, {} filtered out as old versions)",
+        rows.len(),
+        before_filter,
+        filtered_out
     );
 
     // Count unique images
@@ -3398,10 +3441,12 @@ fn main() {
         std::process::exit(1);
     }
 
-    // Validate args
-    if !args.corpus.exists() {
-        eprintln!("Corpus directory does not exist: {:?}", args.corpus);
-        std::process::exit(1);
+    // Validate corpus directories
+    for corpus_path in &args.corpus {
+        if !corpus_path.exists() {
+            eprintln!("Corpus directory does not exist: {:?}", corpus_path);
+            std::process::exit(1);
+        }
     }
 
     // Create output directory
@@ -3442,9 +3487,18 @@ fn main() {
         }
     }
 
-    // Find images
-    let images = find_images(&args.corpus, args.max_images);
-    println!("Found {} images in {:?}", images.len(), args.corpus);
+    // Find images from all corpus directories
+    let mut images = Vec::new();
+    for corpus_path in &args.corpus {
+        let found = find_images(corpus_path, None);
+        println!("Found {} images in {:?}", found.len(), corpus_path);
+        images.extend(found);
+    }
+    // Apply max_images limit if specified
+    if let Some(max) = args.max_images {
+        images.truncate(max);
+    }
+    println!("Total: {} images from {} corpus directories", images.len(), args.corpus.len());
 
     if images.is_empty() {
         eprintln!("No PNG images found!");
