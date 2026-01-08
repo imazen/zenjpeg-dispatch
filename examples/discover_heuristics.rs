@@ -1298,7 +1298,6 @@ impl ImageProcessor {
 /// speedup for metric calculation by caching butteraugli and SSIM2 reference data.
 ///
 /// Returns a vector of WorkResults for all processed items.
-#[allow(dead_code)]
 fn process_image_lockstep(
     work_items: &[WorkItem],
     stats: &AtomicRunStats,
@@ -1466,48 +1465,80 @@ fn process_work_item_with_processor(
         Ordering::Relaxed,
     );
 
-    let bpp = (jpeg_data.len() as f32 * 8.0) / (processor.width * processor.height) as f32;
+    let size_bytes = jpeg_data.len();
+    let bpp = (size_bytes as f32 * 8.0) / (processor.width * processor.height) as f32;
+    let butteraugli = metric_results.butteraugli;
+    let ssimulacra2 = metric_results.ssimulacra2;
+    let dssim = metric_results.dssim;
 
-    // Save JPEG
-    if let Err(e) = fs::create_dir_all(&item.image_dir) {
-        stats
-            .errors
-            .lock()
-            .unwrap()
-            .push(format!("Failed to create dir {:?}: {}", item.image_dir, e));
+    // Create metrics struct
+    let metrics = EncodingMetrics {
+        source_hash: analysis.source_hash.clone(),
+        config_key: config_key.to_string(),
+        quality: item.quality,
+        cache_version: item.cache_version,
+        size_bytes,
+        bpp,
+        butteraugli,
+        ssimulacra2,
+        dssim,
+        encode_time_ms: encode_ms,
+        timestamp: Utc::now(),
+    };
+
+    // Write files with metric-based names (matches process_work_item behavior)
+    let jpg_name = format_encoding_filename(
+        bpp,
+        ssimulacra2,
+        butteraugli,
+        &config_key,
+        item.quality,
+        item.cache_version,
+    );
+    let json_name = format_metrics_filename(
+        bpp,
+        ssimulacra2,
+        butteraugli,
+        &config_key,
+        item.quality,
+        item.cache_version,
+    );
+
+    if let Err(e) = atomic_write(&item.image_dir.join(&jpg_name), &jpeg_data) {
+        return WorkResult {
+            analysis: Arc::clone(analysis),
+            metrics: None,
+            cached: false,
+            error: Some(format!("{} q{}: write error: {}", config_key, item.quality, e)),
+        };
     }
 
-    let jpeg_path = item.image_dir.join(format!(
-        "{}-q{}_v{}.jpg",
-        config_key, item.quality, item.cache_version
-    ));
-    if let Err(e) = atomic_write(&jpeg_path, &jpeg_data) {
-        stats.errors.lock().unwrap().push(format!(
-            "Failed to write {:?}: {}",
-            jpeg_path, e
-        ));
+    let metrics_json = match serde_json::to_string_pretty(&metrics) {
+        Ok(j) => j,
+        Err(e) => {
+            return WorkResult {
+                analysis: Arc::clone(analysis),
+                metrics: None,
+                cached: false,
+                error: Some(format!("{} q{}: serialize error: {}", config_key, item.quality, e)),
+            };
+        }
+    };
+
+    if let Err(e) = atomic_write(&item.image_dir.join(&json_name), metrics_json.as_bytes()) {
+        return WorkResult {
+            analysis: Arc::clone(analysis),
+            metrics: None,
+            cached: false,
+            error: Some(format!("{} q{}: json write error: {}", config_key, item.quality, e)),
+        };
     }
 
-    stats.images_processed.fetch_add(1, Ordering::Relaxed);
-
-    // Compute source hash for EncodingMetrics
-    let source_hash = compute_source_hash(&processor.rgb_pixels);
+    stats.encodings_performed.fetch_add(1, Ordering::Relaxed);
 
     WorkResult {
         analysis: Arc::clone(analysis),
-        metrics: Some(EncodingMetrics {
-            source_hash,
-            config_key: config_key.to_string(),
-            quality: item.quality,
-            cache_version: item.cache_version,
-            size_bytes: jpeg_data.len(),
-            bpp,
-            butteraugli: metric_results.butteraugli,
-            ssimulacra2: metric_results.ssimulacra2,
-            dssim: metric_results.dssim,
-            encode_time_ms: encode_ms,
-            timestamp: Utc::now(),
-        }),
+        metrics: Some(metrics),
         error: None,
         cached: false,
     }
@@ -3049,54 +3080,90 @@ fn main() {
         configs.len()
     );
 
-    // Phase 3: Process work items in parallel
-    println!("Phase 3: Processing encodings in parallel...");
+    // Phase 3: Process images in lockstep mode
+    //
+    // Lockstep processing: For each source image, we create an ImageProcessor that
+    // caches the reference image data for butteraugli and SSIM2. This provides
+    // ~40-50% speedup for metric calculation since the expensive reference preprocessing
+    // only happens once per source image instead of once per encoding.
+    //
+    // We parallelize across source images (outer parallelism), while processing
+    // all configs/qualities for each image sequentially (inner loop) to benefit
+    // from the cached references.
+    println!("Phase 3: Processing encodings in lockstep mode (cached reference metrics)...");
+
+    // Group work items by source image path
+    let mut work_by_image: HashMap<PathBuf, Vec<WorkItem>> = HashMap::new();
+    for item in work_items {
+        work_by_image
+            .entry(item.image_path.clone())
+            .or_default()
+            .push(item);
+    }
+
+    println!(
+        "Processing {} images with {} work items each (avg)",
+        work_by_image.len(),
+        work_by_image.values().map(|v| v.len()).sum::<usize>() / work_by_image.len().max(1)
+    );
+
     let args_ref = &args;
     let stats_ref = &stats;
     let csv_writer_ref = &csv_writer;
 
-    let results: Vec<WorkResult> = work_items
-        .par_iter()
-        .map(|item| {
-            let result = process_work_item(item, stats_ref, args_ref);
+    // Process each image's work items using lockstep mode with cached references
+    // Outer parallelism: different images in parallel
+    // Inner: all configs/qualities for one image processed sequentially with cached refs
+    let results: Vec<WorkResult> = work_by_image
+        .into_par_iter()
+        .flat_map(|(image_path, items)| {
+            // Log which image we're processing
+            if args_ref.verbose {
+                eprintln!("Processing {:?} ({} encodings)", image_path.file_name().unwrap_or_default(), items.len());
+            }
 
-            // Write to CSV immediately with lock
-            if let Some(ref metrics) = result.metrics {
-                // Only write if BPP is in range
-                if metrics.bpp >= args_ref.min_bpp && metrics.bpp <= args_ref.max_bpp {
-                    let row = CsvRow {
-                        source_hash: result.analysis.source_hash.clone(),
-                        source_name: result.analysis.source_name.clone(),
-                        width: result.analysis.width,
-                        height: result.analysis.height,
-                        variance: result.analysis.variance,
-                        edge_density: result.analysis.edge_density,
-                        chroma_complexity: result.analysis.chroma_complexity,
-                        uniform_block_fraction: result.analysis.uniform_block_fraction,
-                        config_key: metrics.config_key.clone(),
-                        quality: metrics.quality,
-                        cache_version: metrics.cache_version,
-                        size_bytes: metrics.size_bytes,
-                        bpp: metrics.bpp,
-                        butteraugli: metrics.butteraugli,
-                        ssimulacra2: metrics.ssimulacra2,
-                        dssim: metrics.dssim,
-                        encode_time_ms: metrics.encode_time_ms,
-                        timestamp: metrics.timestamp.to_rfc3339(),
-                    };
+            // Process all work items for this image using lockstep mode
+            let image_results = process_image_lockstep(&items, stats_ref, args_ref);
 
-                    let mut writer = csv_writer_ref.lock().unwrap();
-                    if let Err(e) = writer.serialize(&row) {
-                        stats_ref.add_error(format!("CSV write error: {}", e));
+            // Write results to CSV
+            for result in &image_results {
+                if let Some(ref metrics) = result.metrics {
+                    // Only write if BPP is in range
+                    if metrics.bpp >= args_ref.min_bpp && metrics.bpp <= args_ref.max_bpp {
+                        let row = CsvRow {
+                            source_hash: result.analysis.source_hash.clone(),
+                            source_name: result.analysis.source_name.clone(),
+                            width: result.analysis.width,
+                            height: result.analysis.height,
+                            variance: result.analysis.variance,
+                            edge_density: result.analysis.edge_density,
+                            chroma_complexity: result.analysis.chroma_complexity,
+                            uniform_block_fraction: result.analysis.uniform_block_fraction,
+                            config_key: metrics.config_key.clone(),
+                            quality: metrics.quality,
+                            cache_version: metrics.cache_version,
+                            size_bytes: metrics.size_bytes,
+                            bpp: metrics.bpp,
+                            butteraugli: metrics.butteraugli,
+                            ssimulacra2: metrics.ssimulacra2,
+                            dssim: metrics.dssim,
+                            encode_time_ms: metrics.encode_time_ms,
+                            timestamp: metrics.timestamp.to_rfc3339(),
+                        };
+
+                        let mut writer = csv_writer_ref.lock().unwrap();
+                        if let Err(e) = writer.serialize(&row) {
+                            stats_ref.add_error(format!("CSV write error: {}", e));
+                        }
                     }
+                }
+
+                if let Some(ref error) = result.error {
+                    stats_ref.add_error(error.clone());
                 }
             }
 
-            if let Some(ref error) = result.error {
-                stats_ref.add_error(error.clone());
-            }
-
-            result
+            image_results
         })
         .collect();
 
