@@ -1082,6 +1082,83 @@ use codec_eval::viewing::ViewingCondition;
 use fast_ssim2::Ssimulacra2Reference;
 use imgref::Img;
 
+// GPU-accelerated SSIM2 support (requires --features gpu)
+#[cfg(feature = "gpu")]
+use cudarse_driver::CuStream;
+#[cfg(feature = "gpu")]
+use cudarse_npp::image::isu::Malloc;
+#[cfg(feature = "gpu")]
+use cudarse_npp::image::{Image as NppImage, C};
+#[cfg(feature = "gpu")]
+use cudarse_npp::set_stream;
+#[cfg(feature = "gpu")]
+use ssimulacra2_cuda::Ssimulacra2 as GpuSsimulacra2;
+
+/// Initialize CUDA once at startup
+#[cfg(feature = "gpu")]
+fn init_cuda_once() -> bool {
+    static INIT: std::sync::Once = std::sync::Once::new();
+    static mut SUCCESS: bool = false;
+
+    INIT.call_once(|| {
+        unsafe {
+            SUCCESS = cudarse_driver::init_cuda_and_primary_ctx().is_ok();
+        }
+    });
+
+    unsafe { SUCCESS }
+}
+
+/// GPU-accelerated SSIM2 context
+#[cfg(feature = "gpu")]
+struct GpuSsim2Context {
+    stream: CuStream,
+    tmp_ref: NppImage<u8, C<3>>,
+    tmp_dis: NppImage<u8, C<3>>,
+    ref_linear: NppImage<f32, C<3>>,
+    dis_linear: NppImage<f32, C<3>>,
+    ssimulacra2: GpuSsimulacra2,
+}
+
+#[cfg(feature = "gpu")]
+impl GpuSsim2Context {
+    fn new(width: u32, height: u32) -> Result<Self, Box<dyn std::error::Error>> {
+        let stream = CuStream::new()?;
+        set_stream(stream.inner() as _)?;
+
+        // Allocate GPU buffers
+        let tmp_ref: NppImage<u8, C<3>> = NppImage::malloc(width, height)?;
+        let tmp_dis: NppImage<u8, C<3>> = tmp_ref.malloc_same_size()?;
+        let ref_linear: NppImage<f32, C<3>> = NppImage::malloc(width, height)?;
+        let dis_linear: NppImage<f32, C<3>> = ref_linear.malloc_same_size()?;
+
+        // Create ssimulacra2 instance (tied to these dimensions)
+        let ssimulacra2 = GpuSsimulacra2::new(&ref_linear, &dis_linear, &stream)?;
+
+        Ok(Self {
+            stream,
+            tmp_ref,
+            tmp_dis,
+            ref_linear,
+            dis_linear,
+            ssimulacra2,
+        })
+    }
+
+    fn compute(&mut self, reference: &[u8], distorted: &[u8]) -> f64 {
+        // compute_from_cpu_srgb_sync handles upload and sRGB->linear conversion
+        self.ssimulacra2.compute_from_cpu_srgb_sync(
+            reference,
+            distorted,
+            &mut self.tmp_ref,
+            &mut self.tmp_dis,
+            &mut self.ref_linear,
+            &mut self.dis_linear,
+            &self.stream
+        ).unwrap_or(0.0)
+    }
+}
+
 /// Holds cached metric references for efficient repeated comparisons.
 ///
 /// When processing a single source image through multiple codecs/qualities,

@@ -12,6 +12,7 @@ categories = ["encoding", "multimedia::images"]
 default = []
 simd = []  # Enable SIMD intrinsics
 ffi-tests = ["jpegli-internals-sys"]  # Enable C++ FFI comparison tests
+gpu = ["ssimulacra2-cuda", "cudarse-driver", "cudarse-npp"]  # GPU-accelerated SSIM2 (requires CUDA)
 
 [dependencies]
 # Core utilities
@@ -31,6 +32,11 @@ jpegli = { path = "../jpegli-rs/jpegli-rs", package = "jpegli-rs" }
 
 # FFI bindings to C++ jpegli (optional, for verification tests)
 jpegli-internals-sys = { path = "../jpegli-rs/internal/jpegli-internals-sys", optional = true }
+
+# GPU-accelerated SSIM2 (optional, requires CUDA installation)
+ssimulacra2-cuda = { path = "../turbo-metrics/crates/ssimulacra2-cuda", optional = true }
+cudarse-driver = { path = "../turbo-metrics/crates/cudarse/cudarse-driver", optional = true }
+cudarse-npp = { path = "../turbo-metrics/crates/cudarse/cudarse-npp", features = ["isu", "ist"], optional = true }
 
 [dev-dependencies]
 # Image I/O
@@ -69,12 +75,8 @@ csv = "1.3"
 chrono = { version = "0.4", features = ["serde"] }
 rayon = "1.8"
 
-# GPU-accelerated SSIM2 (optional, requires CUDA installation)
-# Uncomment if CUDA is available:
-# ssimulacra2-cuda = { path = "../turbo-metrics/crates/ssimulacra2-cuda" }
-# cudarse-driver = { path = "../turbo-metrics/crates/cudarse/cudarse-driver" }
-# cudarse-npp = { path = "../turbo-metrics/crates/cudarse/cudarse-npp", features = ["isu", "ist"] }
-# cuda-colorspace = { path = "../turbo-metrics/crates/cuda-colorspace" }
+# GPU-accelerated SSIM2: Use --features gpu (requires CUDA_PATH to be set)
+# Example: CUDA_PATH=/usr/local/cuda-12.6 cargo run --release --features gpu --example discover_heuristics -- ...
 
 # Profile for building nvptx (CUDA kernel) code - uncomment if using CUDA
 # [profile.release-nvptx]
