@@ -1072,6 +1072,370 @@ struct MetricResults {
     dssim_ms: u64,
 }
 
+// ============================================================================
+// ImageProcessor - Lockstep processing with cached metric references
+// ============================================================================
+
+use butteraugli::{ButteraugliParams, ButteraugliReference};
+use codec_eval::metrics::dssim::{calculate_dssim, rgb8_to_dssim_image};
+use codec_eval::viewing::ViewingCondition;
+use fast_ssim2::Ssimulacra2Reference;
+use imgref::Img;
+
+/// Holds cached metric references for efficient repeated comparisons.
+///
+/// When processing a single source image through multiple codecs/qualities,
+/// the reference image data only needs to be processed once. This provides
+/// ~40-50% speedup for butteraugli and significant speedup for SSIM2.
+///
+/// DSSIM is calculated fresh each time as it's the fastest metric (~22% of time)
+/// and doesn't have a convenient reference caching API.
+struct ImageProcessor {
+    /// Original RGB pixels (sRGB u8) - owned copy for DSSIM
+    rgb_pixels: Vec<u8>,
+    /// RGB as array for SSIM2 - owned
+    rgb_array: Vec<[u8; 3]>,
+    /// Image dimensions
+    width: usize,
+    height: usize,
+    /// Cached butteraugli reference (precomputed XYB + frequency decomposition)
+    butteraugli_ref: ButteraugliReference,
+    /// Cached SSIM2 reference (precomputed linear RGB) - owns its data
+    ssim2_ref: Ssimulacra2Reference,
+    /// Cached DSSIM reference image (ImgVec)
+    dssim_ref_img: imgref::ImgVec<rgb::RGBA<f32>>,
+    /// Viewing condition for DSSIM
+    viewing: ViewingCondition,
+}
+
+impl ImageProcessor {
+    /// Create a new ImageProcessor with cached metric references.
+    ///
+    /// This precomputes reference data for butteraugli and SSIM2, which is expensive
+    /// but pays off when comparing against many distorted versions.
+    fn new(rgb_pixels: Vec<u8>, width: usize, height: usize) -> Result<Self, String> {
+        // Convert to array format for SSIM2
+        let rgb_array: Vec<[u8; 3]> = rgb_pixels
+            .chunks_exact(3)
+            .map(|c| [c[0], c[1], c[2]])
+            .collect();
+
+        // Create butteraugli reference (precomputes XYB + frequency decomposition)
+        // ButteraugliReference::new takes &[u8] and copies internally
+        let butteraugli_ref = ButteraugliReference::new(
+            &rgb_pixels,
+            width,
+            height,
+            ButteraugliParams::default(),
+        ).map_err(|e| format!("Failed to create butteraugli reference: {}", e))?;
+
+        // Create SSIM2 reference (precomputes linear RGB conversion)
+        // Ssimulacra2Reference::new takes Img<&[[u8;3]]> and copies internally
+        let ref_img = Img::new(rgb_array.as_slice(), width, height);
+        let ssim2_ref = Ssimulacra2Reference::new(ref_img)
+            .map_err(|e| format!("Failed to create SSIM2 reference: {:?}", e))?;
+
+        // Create DSSIM reference image (just the ImgVec, comparator is stateless)
+        let dssim_ref_img = rgb8_to_dssim_image(&rgb_pixels, width, height);
+        let viewing = ViewingCondition::default();
+
+        Ok(Self {
+            rgb_pixels,
+            rgb_array,
+            width,
+            height,
+            butteraugli_ref,
+            ssim2_ref,
+            dssim_ref_img,
+            viewing,
+        })
+    }
+
+    /// Measure all metrics against the cached reference.
+    ///
+    /// Butteraugli and SSIM2 use cached references for ~40-50% speedup.
+    /// DSSIM is calculated fresh (fastest metric anyway).
+    fn measure(&self, decoded: &[u8]) -> MetricResults {
+        let expected_size = self.width * self.height * 3;
+
+        if decoded.len() < expected_size {
+            return MetricResults {
+                butteraugli: f32::MAX,
+                ssimulacra2: 0.0,
+                dssim: f32::MAX,
+                butteraugli_ms: 0,
+                ssim2_ms: 0,
+                dssim_ms: 0,
+            };
+        }
+
+        let decoded_slice = &decoded[..expected_size];
+
+        // Calculate all three metrics in parallel using rayon, with timing
+        let ((butteraugli, ba_ms), ((ssimulacra2, ssim_ms), (dssim, dssim_ms))) = rayon::join(
+            || {
+                let start = Instant::now();
+                let result = self.butteraugli_ref.compare(decoded_slice)
+                    .map(|r| r.score as f32)
+                    .unwrap_or(f32::MAX);
+                (result, start.elapsed().as_millis() as u64)
+            },
+            || {
+                rayon::join(
+                    || {
+                        let start = Instant::now();
+                        let test_arr = rgb8_to_array(decoded_slice);
+                        let test_img = Img::new(test_arr.as_slice(), self.width, self.height);
+                        let result = self.ssim2_ref.compare(test_img)
+                            .map(|s| s as f32)
+                            .unwrap_or(0.0);
+                        (result, start.elapsed().as_millis() as u64)
+                    },
+                    || {
+                        let start = Instant::now();
+                        let test_img = rgb8_to_dssim_image(decoded_slice, self.width, self.height);
+                        let result = calculate_dssim(&self.dssim_ref_img, &test_img, &self.viewing)
+                            .map(|s| s as f32)
+                            .unwrap_or(f32::MAX);
+                        (result, start.elapsed().as_millis() as u64)
+                    },
+                )
+            },
+        );
+
+        MetricResults {
+            butteraugli,
+            ssimulacra2,
+            dssim,
+            butteraugli_ms: ba_ms,
+            ssim2_ms: ssim_ms,
+            dssim_ms: dssim_ms,
+        }
+    }
+}
+
+/// Process a single source image through all configs and qualities (lockstep mode).
+///
+/// This is the lockstep processing model: one image at a time, with cached
+/// metric references shared across all encodings. This provides ~40-50%
+/// speedup for metric calculation by caching butteraugli and SSIM2 reference data.
+///
+/// Returns a vector of WorkResults for all processed items.
+#[allow(dead_code)]
+fn process_image_lockstep(
+    work_items: &[WorkItem],
+    stats: &AtomicRunStats,
+    args: &Args,
+) -> Vec<WorkResult> {
+    if work_items.is_empty() {
+        return Vec::new();
+    }
+
+    // All work items share the same source image
+    let first = &work_items[0];
+    let rgb_pixels = first.rgb_pixels.as_ref().clone();
+    let width = first.width;
+    let height = first.height;
+    let analysis = Arc::clone(&first.analysis);
+
+    // Create the ImageProcessor with cached metric references
+    let processor = match ImageProcessor::new(rgb_pixels, width, height) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("Failed to create ImageProcessor: {}", e);
+            return work_items
+                .iter()
+                .map(|item| WorkResult {
+                    analysis: Arc::clone(&item.analysis),
+                    metrics: None,
+                    cached: false,
+                    error: Some(e.clone()),
+                })
+                .collect();
+        }
+    };
+
+    // Process all work items, using the cached processor for metrics
+    work_items
+        .iter()
+        .map(|item| process_work_item_with_processor(item, &processor, &analysis, stats, args))
+        .collect()
+}
+
+/// Process a single work item using a pre-created ImageProcessor.
+///
+/// This is the inner loop of lockstep processing - encodes at one quality,
+/// decodes, and measures metrics using the cached references.
+fn process_work_item_with_processor(
+    item: &WorkItem,
+    processor: &ImageProcessor,
+    analysis: &Arc<ImageAnalysis>,
+    stats: &AtomicRunStats,
+    args: &Args,
+) -> WorkResult {
+    let config_key = item.config.key();
+
+    // Check for existing cache
+    let cache_filename = format!(
+        "{}-q{}_v{}.jpg",
+        config_key, item.quality, item.cache_version
+    );
+    let cached = fs::read_dir(&item.image_dir).ok().and_then(|entries| {
+        entries.filter_map(|e| e.ok()).find(|e| {
+            e.file_name().to_str().map(|s| s == cache_filename).unwrap_or(false)
+        })
+    });
+
+    if cached.is_some() && !args.force {
+        stats.encodings_cached.fetch_add(1, Ordering::Relaxed);
+        return WorkResult {
+            analysis: Arc::clone(analysis),
+            metrics: None,
+            error: None,
+            cached: true,
+        };
+    }
+
+    // Encode
+    let encode_start = Instant::now();
+    let encode_result = match item.config {
+        Config::MozJpeg { subsampling } | Config::MozJpegMax { subsampling } => {
+            encode_mozjpeg(
+                &processor.rgb_pixels,
+                processor.width,
+                processor.height,
+                item.quality,
+                subsampling,
+                matches!(item.config, Config::MozJpegMax { .. }),
+            )
+        }
+        Config::CMozJpeg { subsampling } | Config::CMozJpegMax { subsampling } => encode_cmozjpeg(
+            &processor.rgb_pixels,
+            processor.width,
+            processor.height,
+            item.quality,
+            subsampling,
+            matches!(item.config, Config::CMozJpegMax { .. }),
+        ),
+        Config::Jpegli { subsampling } | Config::JpegliXyb { subsampling } => encode_jpegli(
+            &processor.rgb_pixels,
+            processor.width,
+            processor.height,
+            item.quality,
+            subsampling,
+            matches!(item.config, Config::JpegliXyb { .. }),
+        ),
+        Config::Zenjpeg { .. } => {
+            // Zenjpeg not implemented in lockstep mode yet
+            return WorkResult {
+                analysis: Arc::clone(analysis),
+                metrics: None,
+                error: Some("Zenjpeg not implemented in lockstep mode".to_string()),
+                cached: false,
+            };
+        }
+    };
+
+    let jpeg_data = match encode_result {
+        Ok(data) => data,
+        Err(e) => {
+            stats
+                .errors
+                .lock()
+                .unwrap()
+                .push(format!("{:?} q{}: {}", item.config, item.quality, e));
+            return WorkResult {
+                analysis: Arc::clone(analysis),
+                metrics: None,
+                error: Some(e),
+                cached: false,
+            };
+        }
+    };
+    let encode_ms = encode_start.elapsed().as_millis() as u64;
+    stats.encodings_performed.fetch_add(1, Ordering::Relaxed);
+    stats.total_encode_time_ms.fetch_add(encode_ms, Ordering::Relaxed);
+
+    // Decode
+    let decode_start = Instant::now();
+    let decoded = match decode_jpeg(&jpeg_data) {
+        Ok(d) => d,
+        Err(e) => {
+            stats
+                .errors
+                .lock()
+                .unwrap()
+                .push(format!("{:?} q{} decode: {}", item.config, item.quality, e));
+            return WorkResult {
+                analysis: Arc::clone(analysis),
+                metrics: None,
+                error: Some(e),
+                cached: false,
+            };
+        }
+    };
+    let decode_ms = decode_start.elapsed().as_millis() as u64;
+    stats.total_decode_ms.fetch_add(decode_ms, Ordering::Relaxed);
+
+    // Measure metrics using the cached processor
+    let metric_results = processor.measure(&decoded);
+
+    // Accumulate per-metric timing
+    stats.total_butteraugli_ms.fetch_add(metric_results.butteraugli_ms, Ordering::Relaxed);
+    stats.total_ssim2_ms.fetch_add(metric_results.ssim2_ms, Ordering::Relaxed);
+    stats.total_dssim_ms.fetch_add(metric_results.dssim_ms, Ordering::Relaxed);
+    stats.total_metric_time_ms.fetch_add(
+        metric_results.butteraugli_ms + metric_results.ssim2_ms + metric_results.dssim_ms,
+        Ordering::Relaxed,
+    );
+
+    let bpp = (jpeg_data.len() as f32 * 8.0) / (processor.width * processor.height) as f32;
+
+    // Save JPEG
+    if let Err(e) = fs::create_dir_all(&item.image_dir) {
+        stats
+            .errors
+            .lock()
+            .unwrap()
+            .push(format!("Failed to create dir {:?}: {}", item.image_dir, e));
+    }
+
+    let jpeg_path = item.image_dir.join(format!(
+        "{}-q{}_v{}.jpg",
+        config_key, item.quality, item.cache_version
+    ));
+    if let Err(e) = atomic_write(&jpeg_path, &jpeg_data) {
+        stats.errors.lock().unwrap().push(format!(
+            "Failed to write {:?}: {}",
+            jpeg_path, e
+        ));
+    }
+
+    stats.images_processed.fetch_add(1, Ordering::Relaxed);
+
+    // Compute source hash for EncodingMetrics
+    let source_hash = compute_source_hash(&processor.rgb_pixels);
+
+    WorkResult {
+        analysis: Arc::clone(analysis),
+        metrics: Some(EncodingMetrics {
+            source_hash,
+            config_key: config_key.to_string(),
+            quality: item.quality,
+            cache_version: item.cache_version,
+            size_bytes: jpeg_data.len(),
+            bpp,
+            butteraugli: metric_results.butteraugli,
+            ssimulacra2: metric_results.ssimulacra2,
+            dssim: metric_results.dssim,
+            encode_time_ms: encode_ms,
+            timestamp: Utc::now(),
+        }),
+        error: None,
+        cached: false,
+    }
+}
+
 fn measure_metrics(
     original: &[u8],
     decoded: &[u8],
