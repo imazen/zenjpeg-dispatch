@@ -1088,7 +1088,7 @@ use cudarse_driver::CuStream;
 #[cfg(feature = "gpu")]
 use cudarse_npp::image::isu::Malloc;
 #[cfg(feature = "gpu")]
-use cudarse_npp::image::{Image as NppImage, C};
+use cudarse_npp::image::{Image as NppImage, Img as NppImg, C};
 #[cfg(feature = "gpu")]
 use cudarse_npp::set_stream;
 #[cfg(feature = "gpu")]
