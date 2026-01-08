@@ -1544,6 +1544,9 @@ fn process_work_item_with_processor(
     }
 }
 
+/// Measure all metrics for a decoded image (non-cached version).
+/// Kept for reference - prefer ImageProcessor::measure() for cached version.
+#[allow(dead_code)]
 fn measure_metrics(
     original: &[u8],
     decoded: &[u8],
@@ -2334,10 +2337,13 @@ fn print_summary(stats: &AtomicRunStats, elapsed: std::time::Duration) {
 }
 
 // ============================================================================
-// Work Item Processing
+// Work Item Processing (Legacy non-lockstep mode)
 // ============================================================================
 
-/// Process a single work item (one encoding at one quality level)
+/// Process a single work item (one encoding at one quality level).
+/// This is the legacy non-cached version. Kept for reference.
+/// Prefer process_image_lockstep() which uses cached metric references.
+#[allow(dead_code)]
 fn process_work_item(item: &WorkItem, stats: &AtomicRunStats, args: &Args) -> WorkResult {
     let config_key = item.config.key();
 
