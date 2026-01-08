@@ -1099,6 +1099,8 @@ use cudarse_npp::set_stream;
 use ssimulacra2_cuda::Ssimulacra2 as GpuSsimulacra2;
 #[cfg(feature = "gpu")]
 use dssim_cuda::Dssim as GpuDssim;
+#[cfg(feature = "gpu")]
+use butteraugli_cuda::Butteraugli as GpuButteraugli;
 
 /// GPU verification constants
 #[cfg(feature = "gpu")]
@@ -1107,6 +1109,8 @@ const GPU_VERIFY_INTERVAL: usize = 50;  // Verify every N tests
 const GPU_SSIM2_EPSILON_PCT: f64 = 0.5;  // Allow 0.5% relative error for SSIM2
 #[cfg(feature = "gpu")]
 const GPU_DSSIM_EPSILON_PCT: f64 = 0.5;  // Allow 0.5% relative error for DSSIM
+#[cfg(feature = "gpu")]
+const GPU_BUTTERAUGLI_EPSILON_PCT: f64 = 12.0;  // Allow 12% relative error for Butteraugli - multi-scale algorithm has higher variance
 
 /// Initialize CUDA once at startup
 #[cfg(feature = "gpu")]
@@ -1281,6 +1285,74 @@ impl Drop for GpuDssimContext {
     }
 }
 
+/// GPU-accelerated Butteraugli context
+#[cfg(feature = "gpu")]
+struct GpuButteraugliContext {
+    tmp_ref: NppImage<u8, C<3>>,
+    tmp_dis: NppImage<u8, C<3>>,
+    butteraugli: GpuButteraugli,
+}
+
+#[cfg(feature = "gpu")]
+impl GpuButteraugliContext {
+    fn new(width: u32, height: u32) -> Result<Self, Box<dyn std::error::Error>> {
+        // Allocate GPU buffers for sRGB images
+        let tmp_ref: NppImage<u8, C<3>> = NppImage::malloc(width, height)?;
+        let tmp_dis: NppImage<u8, C<3>> = tmp_ref.malloc_same_size()?;
+
+        // Create Butteraugli instance (has its own internal stream)
+        let butteraugli = GpuButteraugli::new(width, height)?;
+
+        Ok(Self {
+            tmp_ref,
+            tmp_dis,
+            butteraugli,
+        })
+    }
+
+    fn compute(&mut self, reference: &[u8], distorted: &[u8], stream: &CuStream) -> f32 {
+        // Verify buffer sizes match
+        let expected = self.tmp_ref.width() as usize * self.tmp_ref.height() as usize * 3;
+        if reference.len() != expected || distorted.len() != expected {
+            eprintln!("GPU Butteraugli: size mismatch: ref={}, dis={}, expected={}",
+                reference.len(), distorted.len(), expected);
+            return f32::MAX;
+        }
+
+        // Upload images to GPU
+        if let Err(e) = self.tmp_ref.copy_from_cpu(reference, stream.inner() as _) {
+            eprintln!("GPU Butteraugli: failed to upload reference: {:?}", e);
+            return f32::MAX;
+        }
+        if let Err(e) = self.tmp_dis.copy_from_cpu(distorted, stream.inner() as _) {
+            eprintln!("GPU Butteraugli: failed to upload distorted: {:?}", e);
+            return f32::MAX;
+        }
+
+        // CRITICAL: Sync before compute - Butteraugli has its own internal stream,
+        // so we must ensure uploads are complete before it starts computing
+        if let Err(e) = stream.sync() {
+            eprintln!("GPU Butteraugli: failed to sync stream: {:?}", e);
+            return f32::MAX;
+        }
+
+        // Compute Butteraugli
+        match self.butteraugli.compute(self.tmp_ref.full_view(), self.tmp_dis.full_view()) {
+            Ok(score) => score,
+            Err(e) => {
+                eprintln!("GPU Butteraugli compute error: {:?}", e);
+                f32::MAX
+            }
+        }
+    }
+
+    /// Sync and cleanup before dropping
+    fn cleanup(&self, stream: &CuStream) {
+        let _ = stream.sync();
+        let _ = set_stream(CuStream::DEFAULT.inner() as _);
+    }
+}
+
 /// Holds cached metric references for efficient repeated comparisons.
 ///
 /// When processing a single source image through multiple codecs/qualities,
@@ -1311,6 +1383,12 @@ struct ImageProcessor {
     /// GPU DSSIM context (when --gpu flag is used)
     #[cfg(feature = "gpu")]
     gpu_dssim: Option<Mutex<GpuDssimContext>>,
+    /// GPU Butteraugli context (when --gpu flag is used)
+    #[cfg(feature = "gpu")]
+    gpu_butteraugli: Option<Mutex<GpuButteraugliContext>>,
+    /// Shared CUDA stream for GPU operations
+    #[cfg(feature = "gpu")]
+    gpu_stream: Option<CuStream>,
     /// Counter for GPU verification (verify every N tests)
     #[cfg(feature = "gpu")]
     verification_counter: AtomicUsize,
@@ -1384,6 +1462,30 @@ impl ImageProcessor {
             None
         };
 
+        #[cfg(feature = "gpu")]
+        let gpu_butteraugli = if use_gpu {
+            eprintln!("  Creating GPU Butteraugli context for {}x{}...", width, height);
+            match GpuButteraugliContext::new(width as u32, height as u32) {
+                Ok(ctx) => {
+                    eprintln!("  GPU Butteraugli context created successfully");
+                    Some(Mutex::new(ctx))
+                }
+                Err(e) => {
+                    eprintln!("Warning: Failed to create GPU Butteraugli context: {}. Falling back to CPU.", e);
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
+        #[cfg(feature = "gpu")]
+        let gpu_stream = if use_gpu {
+            CuStream::new().ok()
+        } else {
+            None
+        };
+
         #[cfg(not(feature = "gpu"))]
         if use_gpu {
             eprintln!("Warning: --gpu requested but GPU feature not enabled. Using CPU.");
@@ -1402,6 +1504,10 @@ impl ImageProcessor {
             gpu_ssim2,
             #[cfg(feature = "gpu")]
             gpu_dssim,
+            #[cfg(feature = "gpu")]
+            gpu_butteraugli,
+            #[cfg(feature = "gpu")]
+            gpu_stream,
             #[cfg(feature = "gpu")]
             verification_counter: AtomicUsize::new(0),
         })
@@ -1439,9 +1545,14 @@ impl ImageProcessor {
         let use_gpu_dssim = false;
 
         #[cfg(feature = "gpu")]
+        let use_gpu_butteraugli = self.gpu_butteraugli.is_some();
+        #[cfg(not(feature = "gpu"))]
+        let use_gpu_butteraugli = false;
+
+        #[cfg(feature = "gpu")]
         let should_verify = {
             let count = self.verification_counter.fetch_add(1, Ordering::Relaxed);
-            (use_gpu_ssim2 || use_gpu_dssim) && (count % GPU_VERIFY_INTERVAL == 0)
+            (use_gpu_ssim2 || use_gpu_dssim || use_gpu_butteraugli) && (count % GPU_VERIFY_INTERVAL == 0)
         };
 
         // Calculate SSIM2 - either on GPU or CPU
@@ -1485,20 +1596,32 @@ impl ImageProcessor {
             (result, start.elapsed().as_millis() as u64)
         };
 
-        // GPU verification: compare GPU results against CPU every N tests
-        #[cfg(feature = "gpu")]
-        if should_verify {
-            self.verify_gpu_accuracy(decoded_slice, ssimulacra2, dssim, use_gpu_ssim2, use_gpu_dssim);
-        }
-
-        // Calculate butteraugli on CPU with cached reference
-        let (butteraugli, ba_ms) = {
+        // Calculate Butteraugli - either on GPU or CPU
+        let (butteraugli, ba_ms) = if use_gpu_butteraugli {
+            #[cfg(feature = "gpu")]
+            {
+                let start = Instant::now();
+                let stream = self.gpu_stream.as_ref().expect("GPU stream required for butteraugli");
+                let result = self.gpu_butteraugli.as_ref().unwrap().lock().unwrap()
+                    .compute(&self.rgb_pixels, decoded_slice, stream);
+                (result, start.elapsed().as_millis() as u64)
+            }
+            #[cfg(not(feature = "gpu"))]
+            unreachable!()
+        } else {
             let start = Instant::now();
             let result = self.butteraugli_ref.compare(decoded_slice)
                 .map(|r| r.score as f32)
                 .unwrap_or(f32::MAX);
             (result, start.elapsed().as_millis() as u64)
         };
+
+        // GPU verification: compare GPU results against CPU every N tests
+        #[cfg(feature = "gpu")]
+        if should_verify {
+            self.verify_gpu_accuracy(decoded_slice, ssimulacra2, dssim, butteraugli,
+                                     use_gpu_ssim2, use_gpu_dssim, use_gpu_butteraugli);
+        }
 
         MetricResults {
             butteraugli,
@@ -1512,8 +1635,8 @@ impl ImageProcessor {
 
     /// Verify GPU results against CPU computation
     #[cfg(feature = "gpu")]
-    fn verify_gpu_accuracy(&self, decoded_slice: &[u8], gpu_ssim2: f32, gpu_dssim: f32,
-                           used_gpu_ssim2: bool, used_gpu_dssim: bool) {
+    fn verify_gpu_accuracy(&self, decoded_slice: &[u8], gpu_ssim2: f32, gpu_dssim: f32, gpu_butteraugli: f32,
+                           used_gpu_ssim2: bool, used_gpu_dssim: bool, used_gpu_butteraugli: bool) {
         let count = self.verification_counter.load(Ordering::Relaxed);
 
         // Verify SSIM2
@@ -1562,6 +1685,29 @@ impl ImageProcessor {
             } else {
                 eprintln!("✅ GPU DSSIM verified #{}: GPU={:.6} CPU={:.6} err={:.4}%",
                          count, gpu_dssim, cpu_dssim, error_pct);
+            }
+        }
+
+        // Verify Butteraugli
+        if used_gpu_butteraugli {
+            let cpu_butteraugli = self.butteraugli_ref.compare(decoded_slice)
+                .map(|r| r.score as f32)
+                .unwrap_or(f32::MAX);
+
+            let error_pct = if cpu_butteraugli.abs() > 0.0001 {
+                ((gpu_butteraugli - cpu_butteraugli).abs() / cpu_butteraugli.abs()) * 100.0
+            } else {
+                (gpu_butteraugli - cpu_butteraugli).abs() * 100.0
+            };
+
+            if error_pct > GPU_BUTTERAUGLI_EPSILON_PCT as f32 {
+                eprintln!("\n🚨🚨🚨 GPU BUTTERAUGLI DIVERGENCE DETECTED! 🚨🚨🚨");
+                eprintln!("   Test #{}: GPU={:.4} CPU={:.4} Error={:.3}% (max={:.1}%)",
+                         count, gpu_butteraugli, cpu_butteraugli, error_pct, GPU_BUTTERAUGLI_EPSILON_PCT);
+                eprintln!("   ⚠️  Results may be unreliable! Consider using --no-gpu\n");
+            } else {
+                eprintln!("✅ GPU Butteraugli verified #{}: GPU={:.4} CPU={:.4} err={:.2}%",
+                         count, gpu_butteraugli, cpu_butteraugli, error_pct);
             }
         }
     }

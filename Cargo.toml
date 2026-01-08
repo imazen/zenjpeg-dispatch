@@ -12,7 +12,7 @@ categories = ["encoding", "multimedia::images"]
 default = []
 simd = []  # Enable SIMD intrinsics
 ffi-tests = ["jpegli-internals-sys"]  # Enable C++ FFI comparison tests
-gpu = ["ssimulacra2-cuda", "dssim-cuda", "cudarse-driver", "cudarse-npp"]  # GPU-accelerated metrics (requires CUDA)
+gpu = ["ssimulacra2-cuda", "dssim-cuda", "butteraugli-cuda", "cudarse-driver", "cudarse-npp"]  # GPU-accelerated metrics (requires CUDA)
 
 [dependencies]
 # Core utilities
@@ -36,6 +36,7 @@ jpegli-internals-sys = { path = "../jpegli-rs/internal/jpegli-internals-sys", op
 # GPU-accelerated metrics (optional, requires CUDA installation)
 ssimulacra2-cuda = { path = "../turbo-metrics/crates/ssimulacra2-cuda", optional = true }
 dssim-cuda = { path = "../turbo-metrics/crates/dssim-cuda", optional = true }
+butteraugli-cuda = { path = "../turbo-metrics/crates/butteraugli-cuda", optional = true }
 cudarse-driver = { path = "../turbo-metrics/crates/cudarse/cudarse-driver", optional = true }
 cudarse-npp = { path = "../turbo-metrics/crates/cudarse/cudarse-npp", features = ["isu", "ist"], optional = true }
 
