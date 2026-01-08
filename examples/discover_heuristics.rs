@@ -395,6 +395,10 @@ struct Args {
     /// Skip the startup quick-check (3 quality levels, 1 image per config)
     #[arg(long)]
     skip_verify: bool,
+
+    /// Use GPU-accelerated SSIMULACRA2 (requires --features gpu and CUDA)
+    #[arg(long)]
+    gpu: bool,
 }
 
 // ============================================================================
@@ -1076,7 +1080,7 @@ struct MetricResults {
 // ImageProcessor - Lockstep processing with cached metric references
 // ============================================================================
 
-use butteraugli::{ButteraugliParams, ButteraugliReference};
+use butteraugli::{ButteraugliParams, precompute::ButteraugliReference};
 use codec_eval::metrics::dssim::{calculate_dssim, rgb8_to_dssim_image};
 use codec_eval::viewing::ViewingCondition;
 use fast_ssim2::Ssimulacra2Reference;
@@ -1135,6 +1139,9 @@ impl GpuSsim2Context {
         // Create ssimulacra2 instance (tied to these dimensions)
         let ssimulacra2 = GpuSsimulacra2::new(&ref_linear, &dis_linear, &stream)?;
 
+        // Sync to ensure all GPU operations complete before first compute
+        stream.sync()?;
+
         Ok(Self {
             stream,
             tmp_ref,
@@ -1146,8 +1153,16 @@ impl GpuSsim2Context {
     }
 
     fn compute(&mut self, reference: &[u8], distorted: &[u8]) -> f64 {
+        // Verify buffer sizes match
+        let expected = self.tmp_ref.width() as usize * self.tmp_ref.height() as usize * 3;
+        if reference.len() != expected || distorted.len() != expected {
+            eprintln!("GPU SSIM2: size mismatch: ref={}, dis={}, expected={}",
+                reference.len(), distorted.len(), expected);
+            return 0.0;
+        }
+
         // compute_from_cpu_srgb_sync handles upload and sRGB->linear conversion
-        self.ssimulacra2.compute_from_cpu_srgb_sync(
+        match self.ssimulacra2.compute_from_cpu_srgb_sync(
             reference,
             distorted,
             &mut self.tmp_ref,
@@ -1155,7 +1170,28 @@ impl GpuSsim2Context {
             &mut self.ref_linear,
             &mut self.dis_linear,
             &self.stream
-        ).unwrap_or(0.0)
+        ) {
+            Ok(score) => score,
+            Err(e) => {
+                eprintln!("GPU SSIM2 compute error: {:?}", e);
+                0.0
+            }
+        }
+    }
+
+    /// Sync and cleanup before dropping
+    fn cleanup(&self) {
+        // Sync to ensure all GPU operations complete before dropping resources
+        let _ = self.stream.sync();
+        // Set default stream to avoid NPP using our stream during cleanup
+        let _ = set_stream(CuStream::DEFAULT.inner() as _);
+    }
+}
+
+#[cfg(feature = "gpu")]
+impl Drop for GpuSsim2Context {
+    fn drop(&mut self) {
+        self.cleanup();
     }
 }
 
@@ -1165,24 +1201,30 @@ impl GpuSsim2Context {
 /// the reference image data only needs to be processed once. This provides
 /// ~40-50% speedup for butteraugli and significant speedup for SSIM2.
 ///
+/// When GPU mode is enabled, SSIM2 uses GPU acceleration for even faster computation.
+///
 /// DSSIM is calculated fresh each time as it's the fastest metric (~22% of time)
 /// and doesn't have a convenient reference caching API.
 struct ImageProcessor {
-    /// Original RGB pixels (sRGB u8) - owned copy for DSSIM
+    /// Original RGB pixels (sRGB u8) - owned copy for DSSIM and GPU SSIM2
     rgb_pixels: Vec<u8>,
-    /// RGB as array for SSIM2 - owned
+    /// RGB as array for CPU SSIM2 - owned
     rgb_array: Vec<[u8; 3]>,
     /// Image dimensions
     width: usize,
     height: usize,
     /// Cached butteraugli reference (precomputed XYB + frequency decomposition)
     butteraugli_ref: ButteraugliReference,
-    /// Cached SSIM2 reference (precomputed linear RGB) - owns its data
+    /// Cached SSIM2 reference (precomputed linear RGB) - owns its data (CPU mode)
     ssim2_ref: Ssimulacra2Reference,
     /// Cached DSSIM reference image (ImgVec)
     dssim_ref_img: imgref::ImgVec<rgb::RGBA<f32>>,
     /// Viewing condition for DSSIM
     viewing: ViewingCondition,
+    /// GPU SSIM2 context (when --gpu flag is used)
+    /// Using Mutex for Send+Sync, required for rayon parallel iteration
+    #[cfg(feature = "gpu")]
+    gpu_ssim2: Option<Mutex<GpuSsim2Context>>,
 }
 
 impl ImageProcessor {
@@ -1190,7 +1232,9 @@ impl ImageProcessor {
     ///
     /// This precomputes reference data for butteraugli and SSIM2, which is expensive
     /// but pays off when comparing against many distorted versions.
-    fn new(rgb_pixels: Vec<u8>, width: usize, height: usize) -> Result<Self, String> {
+    ///
+    /// If `use_gpu` is true and the GPU feature is enabled, SSIM2 will use GPU acceleration.
+    fn new(rgb_pixels: Vec<u8>, width: usize, height: usize, use_gpu: bool) -> Result<Self, String> {
         // Convert to array format for SSIM2
         let rgb_array: Vec<[u8; 3]> = rgb_pixels
             .chunks_exact(3)
@@ -1216,6 +1260,29 @@ impl ImageProcessor {
         let dssim_ref_img = rgb8_to_dssim_image(&rgb_pixels, width, height);
         let viewing = ViewingCondition::default();
 
+        // Initialize GPU SSIM2 context if requested
+        #[cfg(feature = "gpu")]
+        let gpu_ssim2 = if use_gpu {
+            eprintln!("  Creating GPU SSIM2 context for {}x{}...", width, height);
+            match GpuSsim2Context::new(width as u32, height as u32) {
+                Ok(ctx) => {
+                    eprintln!("  GPU SSIM2 context created successfully");
+                    Some(Mutex::new(ctx))
+                }
+                Err(e) => {
+                    eprintln!("Warning: Failed to create GPU SSIM2 context: {}. Falling back to CPU.", e);
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
+        #[cfg(not(feature = "gpu"))]
+        if use_gpu {
+            eprintln!("Warning: --gpu requested but GPU feature not enabled. Using CPU.");
+        }
+
         Ok(Self {
             rgb_pixels,
             rgb_array,
@@ -1225,12 +1292,15 @@ impl ImageProcessor {
             ssim2_ref,
             dssim_ref_img,
             viewing,
+            #[cfg(feature = "gpu")]
+            gpu_ssim2,
         })
     }
 
     /// Measure all metrics against the cached reference.
     ///
     /// Butteraugli and SSIM2 use cached references for ~40-50% speedup.
+    /// When GPU is enabled, SSIM2 uses GPU acceleration.
     /// DSSIM is calculated fresh (fastest metric anyway).
     fn measure(&self, decoded: &[u8]) -> MetricResults {
         let expected_size = self.width * self.height * 3;
@@ -1248,35 +1318,56 @@ impl ImageProcessor {
 
         let decoded_slice = &decoded[..expected_size];
 
-        // Calculate all three metrics in parallel using rayon, with timing
-        let ((butteraugli, ba_ms), ((ssimulacra2, ssim_ms), (dssim, dssim_ms))) = rayon::join(
+        // Check if GPU SSIM2 is available
+        #[cfg(feature = "gpu")]
+        let use_gpu_ssim2 = self.gpu_ssim2.is_some();
+        #[cfg(not(feature = "gpu"))]
+        let use_gpu_ssim2 = false;
+
+        // Calculate SSIM2 - either on GPU (synchronous) or CPU (in parallel with others)
+        let (ssimulacra2, ssim_ms) = if use_gpu_ssim2 {
+            #[cfg(feature = "gpu")]
+            {
+                let start = Instant::now();
+                let result = self.gpu_ssim2.as_ref().unwrap().lock().unwrap()
+                    .compute(&self.rgb_pixels, decoded_slice) as f32;
+                (result, start.elapsed().as_millis() as u64)
+            }
+            #[cfg(not(feature = "gpu"))]
+            unreachable!()
+        } else {
+            let start = Instant::now();
+            let test_arr = rgb8_to_array(decoded_slice);
+            let test_img = Img::new(test_arr.as_slice(), self.width, self.height);
+            let result = self.ssim2_ref.compare(test_img)
+                .map(|s| s as f32)
+                .unwrap_or(0.0);
+            (result, start.elapsed().as_millis() as u64)
+        };
+
+        // Calculate butteraugli and DSSIM in parallel on CPU
+        // Explicitly capture only the fields needed to avoid capturing the non-Send GPU context
+        let butteraugli_ref = &self.butteraugli_ref;
+        let dssim_ref_img = &self.dssim_ref_img;
+        let viewing = &self.viewing;
+        let width = self.width;
+        let height = self.height;
+
+        let ((butteraugli, ba_ms), (dssim, dssim_ms)) = rayon::join(
             || {
                 let start = Instant::now();
-                let result = self.butteraugli_ref.compare(decoded_slice)
+                let result = butteraugli_ref.compare(decoded_slice)
                     .map(|r| r.score as f32)
                     .unwrap_or(f32::MAX);
                 (result, start.elapsed().as_millis() as u64)
             },
             || {
-                rayon::join(
-                    || {
-                        let start = Instant::now();
-                        let test_arr = rgb8_to_array(decoded_slice);
-                        let test_img = Img::new(test_arr.as_slice(), self.width, self.height);
-                        let result = self.ssim2_ref.compare(test_img)
-                            .map(|s| s as f32)
-                            .unwrap_or(0.0);
-                        (result, start.elapsed().as_millis() as u64)
-                    },
-                    || {
-                        let start = Instant::now();
-                        let test_img = rgb8_to_dssim_image(decoded_slice, self.width, self.height);
-                        let result = calculate_dssim(&self.dssim_ref_img, &test_img, &self.viewing)
-                            .map(|s| s as f32)
-                            .unwrap_or(f32::MAX);
-                        (result, start.elapsed().as_millis() as u64)
-                    },
-                )
+                let start = Instant::now();
+                let test_img = rgb8_to_dssim_image(decoded_slice, width, height);
+                let result = calculate_dssim(dssim_ref_img, &test_img, viewing)
+                    .map(|s| s as f32)
+                    .unwrap_or(f32::MAX);
+                (result, start.elapsed().as_millis() as u64)
             },
         );
 
@@ -1314,8 +1405,8 @@ fn process_image_lockstep(
     let height = first.height;
     let analysis = Arc::clone(&first.analysis);
 
-    // Create the ImageProcessor with cached metric references
-    let processor = match ImageProcessor::new(rgb_pixels, width, height) {
+    // Create the ImageProcessor with cached metric references (and GPU if enabled)
+    let processor = match ImageProcessor::new(rgb_pixels, width, height, args.gpu) {
         Ok(p) => p,
         Err(e) => {
             eprintln!("Failed to create ImageProcessor: {}", e);
@@ -2945,6 +3036,25 @@ fn load_png(path: &Path) -> Result<(Vec<u8>, usize, usize), String> {
 fn main() {
     let args = Args::parse();
 
+    // Initialize CUDA if --gpu flag is set
+    #[cfg(feature = "gpu")]
+    if args.gpu {
+        if init_cuda_once() {
+            println!("GPU acceleration enabled (CUDA initialized)");
+        } else {
+            eprintln!("Error: --gpu requested but CUDA initialization failed");
+            eprintln!("Make sure CUDA_PATH is set and CUDA is properly installed");
+            std::process::exit(1);
+        }
+    }
+
+    #[cfg(not(feature = "gpu"))]
+    if args.gpu {
+        eprintln!("Error: --gpu requested but GPU feature is not enabled");
+        eprintln!("Rebuild with: cargo run --release --features gpu --example discover_heuristics");
+        std::process::exit(1);
+    }
+
     // Validate args
     if !args.corpus.exists() {
         eprintln!("Corpus directory does not exist: {:?}", args.corpus);
@@ -3096,7 +3206,11 @@ fn main() {
     // We parallelize across source images (outer parallelism), while processing
     // all configs/qualities for each image sequentially (inner loop) to benefit
     // from the cached references.
-    println!("Phase 3: Processing encodings in lockstep mode (cached reference metrics)...");
+    if args.gpu {
+        println!("Phase 3: Processing encodings in lockstep mode (GPU SSIM2, sequential)...");
+    } else {
+        println!("Phase 3: Processing encodings in lockstep mode (cached reference metrics)...");
+    }
 
     // Group work items by source image path
     let mut work_by_image: HashMap<PathBuf, Vec<WorkItem>> = HashMap::new();
@@ -3108,70 +3222,79 @@ fn main() {
     }
 
     println!(
-        "Processing {} images with {} work items each (avg)",
+        "Processing {} images with {} work items each (avg){}",
         work_by_image.len(),
-        work_by_image.values().map(|v| v.len()).sum::<usize>() / work_by_image.len().max(1)
+        work_by_image.values().map(|v| v.len()).sum::<usize>() / work_by_image.len().max(1),
+        if args.gpu { " [GPU mode - sequential to maintain CUDA context]" } else { "" }
     );
 
     let args_ref = &args;
     let stats_ref = &stats;
     let csv_writer_ref = &csv_writer;
 
-    // Process each image's work items using lockstep mode with cached references
-    // Outer parallelism: different images in parallel
-    // Inner: all configs/qualities for one image processed sequentially with cached refs
-    let results: Vec<WorkResult> = work_by_image
-        .into_par_iter()
-        .flat_map(|(image_path, items)| {
-            // Log which image we're processing
-            if args_ref.verbose {
-                eprintln!("Processing {:?} ({} encodings)", image_path.file_name().unwrap_or_default(), items.len());
-            }
+    // Helper to process one image and write results to CSV
+    let process_one_image = |image_path: &PathBuf, items: &[WorkItem]| -> Vec<WorkResult> {
+        if args_ref.verbose {
+            eprintln!("Processing {:?} ({} encodings)", image_path.file_name().unwrap_or_default(), items.len());
+        }
 
-            // Process all work items for this image using lockstep mode
-            let image_results = process_image_lockstep(&items, stats_ref, args_ref);
+        let image_results = process_image_lockstep(items, stats_ref, args_ref);
 
-            // Write results to CSV
-            for result in &image_results {
-                if let Some(ref metrics) = result.metrics {
-                    // Only write if BPP is in range
-                    if metrics.bpp >= args_ref.min_bpp && metrics.bpp <= args_ref.max_bpp {
-                        let row = CsvRow {
-                            source_hash: result.analysis.source_hash.clone(),
-                            source_name: result.analysis.source_name.clone(),
-                            width: result.analysis.width,
-                            height: result.analysis.height,
-                            variance: result.analysis.variance,
-                            edge_density: result.analysis.edge_density,
-                            chroma_complexity: result.analysis.chroma_complexity,
-                            uniform_block_fraction: result.analysis.uniform_block_fraction,
-                            config_key: metrics.config_key.clone(),
-                            quality: metrics.quality,
-                            cache_version: metrics.cache_version,
-                            size_bytes: metrics.size_bytes,
-                            bpp: metrics.bpp,
-                            butteraugli: metrics.butteraugli,
-                            ssimulacra2: metrics.ssimulacra2,
-                            dssim: metrics.dssim,
-                            encode_time_ms: metrics.encode_time_ms,
-                            timestamp: metrics.timestamp.to_rfc3339(),
-                        };
+        // Write results to CSV
+        for result in &image_results {
+            if let Some(ref metrics) = result.metrics {
+                if metrics.bpp >= args_ref.min_bpp && metrics.bpp <= args_ref.max_bpp {
+                    let row = CsvRow {
+                        source_hash: result.analysis.source_hash.clone(),
+                        source_name: result.analysis.source_name.clone(),
+                        width: result.analysis.width,
+                        height: result.analysis.height,
+                        variance: result.analysis.variance,
+                        edge_density: result.analysis.edge_density,
+                        chroma_complexity: result.analysis.chroma_complexity,
+                        uniform_block_fraction: result.analysis.uniform_block_fraction,
+                        config_key: metrics.config_key.clone(),
+                        quality: metrics.quality,
+                        cache_version: metrics.cache_version,
+                        size_bytes: metrics.size_bytes,
+                        bpp: metrics.bpp,
+                        butteraugli: metrics.butteraugli,
+                        ssimulacra2: metrics.ssimulacra2,
+                        dssim: metrics.dssim,
+                        encode_time_ms: metrics.encode_time_ms,
+                        timestamp: metrics.timestamp.to_rfc3339(),
+                    };
 
-                        let mut writer = csv_writer_ref.lock().unwrap();
-                        if let Err(e) = writer.serialize(&row) {
-                            stats_ref.add_error(format!("CSV write error: {}", e));
-                        }
+                    let mut writer = csv_writer_ref.lock().unwrap();
+                    if let Err(e) = writer.serialize(&row) {
+                        stats_ref.add_error(format!("CSV write error: {}", e));
                     }
                 }
-
-                if let Some(ref error) = result.error {
-                    stats_ref.add_error(error.clone());
-                }
             }
 
-            image_results
-        })
-        .collect();
+            if let Some(ref error) = result.error {
+                stats_ref.add_error(error.clone());
+            }
+        }
+
+        image_results
+    };
+
+    // Process images - sequentially for GPU mode (CUDA context is thread-local),
+    // parallel for CPU mode
+    let results: Vec<WorkResult> = if args.gpu {
+        // GPU mode: sequential processing to maintain CUDA context
+        work_by_image
+            .iter()
+            .flat_map(|(image_path, items)| process_one_image(image_path, items))
+            .collect()
+    } else {
+        // CPU mode: parallel processing across images
+        work_by_image
+            .into_par_iter()
+            .flat_map(|(image_path, items)| process_one_image(&image_path, &items))
+            .collect()
+    };
 
     // Flush CSV
     {
@@ -3200,4 +3323,11 @@ fn main() {
     }
 
     println!("\nResults written to {:?}", args.output);
+
+    // GPU mode: exit immediately to avoid CUDA cleanup crash
+    // The CUDA driver cleanup can cause segfaults on some systems
+    #[cfg(feature = "gpu")]
+    if args.gpu {
+        std::process::exit(0);
+    }
 }
