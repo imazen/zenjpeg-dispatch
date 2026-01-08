@@ -1102,15 +1102,17 @@ use dssim_cuda::Dssim as GpuDssim;
 #[cfg(feature = "gpu")]
 use butteraugli_cuda::Butteraugli as GpuButteraugli;
 
-/// GPU verification constants
+/// GPU verification constants - based on observed max errors from 24-image Kodak benchmark
 #[cfg(feature = "gpu")]
 const GPU_VERIFY_INTERVAL: usize = 50;  // Verify every N tests
 #[cfg(feature = "gpu")]
-const GPU_SSIM2_EPSILON_PCT: f64 = 0.5;  // Allow 0.5% relative error for SSIM2
+const GPU_SSIM2_EPSILON_PCT: f64 = 0.5;  // Max observed: 0.43% (relative error higher near zero values)
 #[cfg(feature = "gpu")]
-const GPU_DSSIM_EPSILON_PCT: f64 = 0.5;  // Allow 0.5% relative error for DSSIM
+const GPU_SSIM2_EPSILON_ABS: f64 = 0.1;  // Absolute threshold for near-zero SSIM2 scores
 #[cfg(feature = "gpu")]
-const GPU_BUTTERAUGLI_EPSILON_PCT: f64 = 12.0;  // Allow 12% relative error for Butteraugli - multi-scale algorithm has higher variance
+const GPU_DSSIM_EPSILON_PCT: f64 = 0.1;  // Max observed: 0.045%
+#[cfg(feature = "gpu")]
+const GPU_BUTTERAUGLI_EPSILON_PCT: f64 = 12.0;  // Max observed: 11.37% (multi-scale algorithm variance)
 
 /// Initialize CUDA once at startup
 #[cfg(feature = "gpu")]
@@ -1647,16 +1649,26 @@ impl ImageProcessor {
                 .map(|s| s as f32)
                 .unwrap_or(0.0);
 
+            let abs_diff = (gpu_ssim2 - cpu_ssim2).abs();
             let error_pct = if cpu_ssim2.abs() > 0.0001 {
-                ((gpu_ssim2 - cpu_ssim2).abs() / cpu_ssim2.abs()) * 100.0
+                (abs_diff / cpu_ssim2.abs()) * 100.0
             } else {
-                (gpu_ssim2 - cpu_ssim2).abs() * 100.0
+                abs_diff * 100.0
             };
 
-            if error_pct > GPU_SSIM2_EPSILON_PCT as f32 {
+            // Use absolute threshold for small values where relative error is misleading
+            // SSIM2 scores range from ~-inf to 100, with ~70+ being "good quality"
+            // For low scores (< 10), absolute diff matters more than percentage
+            let is_valid = if cpu_ssim2.abs() < 10.0 {
+                abs_diff < GPU_SSIM2_EPSILON_ABS as f32
+            } else {
+                error_pct <= GPU_SSIM2_EPSILON_PCT as f32
+            };
+
+            if !is_valid {
                 eprintln!("\n🚨🚨🚨 GPU SSIM2 DIVERGENCE DETECTED! 🚨🚨🚨");
-                eprintln!("   Test #{}: GPU={:.6} CPU={:.6} Error={:.3}% (max={:.1}%)",
-                         count, gpu_ssim2, cpu_ssim2, error_pct, GPU_SSIM2_EPSILON_PCT);
+                eprintln!("   Test #{}: GPU={:.6} CPU={:.6} Error={:.3}% abs={:.4} (max={:.1}%/{:.2}abs)",
+                         count, gpu_ssim2, cpu_ssim2, error_pct, abs_diff, GPU_SSIM2_EPSILON_PCT, GPU_SSIM2_EPSILON_ABS);
                 eprintln!("   ⚠️  Results may be unreliable! Consider using --no-gpu\n");
             } else {
                 eprintln!("✅ GPU SSIM2 verified #{}: GPU={:.4} CPU={:.4} err={:.4}%",
