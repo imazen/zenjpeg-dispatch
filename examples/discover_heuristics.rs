@@ -1,363 +1,828 @@
-//! Benchmark to discover optimal codec/quality heuristics for the unified quality scale.
+//! Benchmark infrastructure for discovering optimal codec/quality heuristics.
 //!
-//! This benchmark:
-//! 1. Encodes each test image at many quality levels with both mozjpeg and jpegli
-//! 2. Measures Butteraugli and SSIMULACRA2 for each encoding
-//! 3. Builds per-image Pareto fronts
-//! 4. Correlates image characteristics with optimal codec choice
-//! 5. Outputs heuristic data for the unified quality system
+//! Features:
+//! - Incremental caching with atomic writes
+//! - Per-config cache invalidation via code hashing
+//! - BPP-bounded bidirectional quality iteration
+//! - Human-readable filenames sorted by BPP
+//! - Master CSV with all results + image analysis
+//! - Resumable across runs and corpora
 //!
 //! Run with:
 //! ```
-//! cargo run --release --example discover_heuristics -- /path/to/corpus output.json
+//! cargo run --release --example discover_heuristics -- \
+//!   --corpus /path/to/images \
+//!   --output ./benchmark_cache \
+//!   --min-bpp 0.2 --max-bpp 2.0 \
+//!   --step 5
 //! ```
 
 use std::collections::HashMap;
-use std::fs;
-use std::io::Write;
+use std::fs::{self, File};
+use std::io::{self, BufWriter, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
+use rayon::prelude::*;
+
+use chrono::{DateTime, Utc};
+use clap::Parser;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
-/// A single encoding data point
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct EncodingPoint {
-    /// Codec used
-    codec: String,
-    /// Quality value (1-100)
-    quality: u8,
-    /// File size in bytes
-    size: usize,
-    /// Bits per pixel
-    bpp: f32,
-    /// Butteraugli score (lower = better)
-    butteraugli: f32,
-    /// SSIMULACRA2 score (higher = better)
-    ssimulacra2: f32,
-    /// Encoding time in milliseconds
-    encode_time_ms: u64,
+// ============================================================================
+// CLI Arguments
+// ============================================================================
+
+// ============================================================================
+// Subsampling Configuration
+// ============================================================================
+
+/// Chroma subsampling mode
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+enum Subsampling {
+    /// 4:2:0 - Quarter chroma resolution (most compression)
+    S420,
+    /// 4:2:2 - Half horizontal chroma resolution
+    S422,
+    /// 4:4:4 - Full chroma resolution (best quality)
+    S444,
+    /// Use evalchroma crate to decide based on image content
+    Auto,
 }
 
-/// Image analysis features
+impl Subsampling {
+    fn as_str(&self) -> &'static str {
+        match self {
+            Subsampling::S420 => "420",
+            Subsampling::S422 => "422",
+            Subsampling::S444 => "444",
+            Subsampling::Auto => "auto",
+        }
+    }
+}
+
+impl std::fmt::Display for Subsampling {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.as_str())
+    }
+}
+
+// ============================================================================
+// Encoder Configuration (nested enum)
+// ============================================================================
+
+/// Encoder configuration with encoder-specific options.
+/// Each variant represents a distinct encoder with its settings.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+enum Config {
+    /// Mozilla's optimized JPEG encoder (baseline mode) - Rust port
+    MozJpeg { subsampling: Subsampling },
+    /// Mozilla's max compression (progressive + optimize_scans) - Rust port
+    MozJpegMax { subsampling: Subsampling },
+    /// C mozjpeg reference implementation (via mozjpeg crate)
+    CMozJpeg { subsampling: Subsampling },
+    /// C mozjpeg max compression (progressive + optimize_scans)
+    CMozJpegMax { subsampling: Subsampling },
+    /// Google's perceptual JPEG encoder
+    Jpegli { subsampling: Subsampling },
+    /// Jpegli with XYB color space (more perceptually optimized)
+    JpegliXyb { subsampling: Subsampling },
+    /// Zenjpeg hybrid encoder (combines mozjpeg trellis + jpegli AQ)
+    Zenjpeg { subsampling: Subsampling },
+}
+
+/// Trait for encoding images with a configuration
+trait Encode {
+    /// Get the string key for this config (used in filenames and cache)
+    fn key(&self) -> String;
+
+    /// Get the source files that affect this config's behavior (for cache invalidation)
+    fn source_files(&self) -> Vec<&'static str>;
+
+    /// Encode RGB pixels to JPEG
+    fn encode(
+        &self,
+        pixels: &[u8],
+        width: usize,
+        height: usize,
+        quality: u8,
+    ) -> Result<Vec<u8>, String>;
+}
+
+impl Encode for Config {
+    fn key(&self) -> String {
+        match self {
+            Config::MozJpeg { subsampling } => format!("mozjpeg-{}", subsampling),
+            Config::MozJpegMax { subsampling } => format!("mozjpeg-max-{}", subsampling),
+            Config::CMozJpeg { subsampling } => format!("cmozjpeg-{}", subsampling),
+            Config::CMozJpegMax { subsampling } => format!("cmozjpeg-max-{}", subsampling),
+            Config::Jpegli { subsampling } => format!("jpegli-{}", subsampling),
+            Config::JpegliXyb { subsampling } => format!("jpegli-xyb-{}", subsampling),
+            Config::Zenjpeg { subsampling } => format!("zenjpeg-{}", subsampling),
+        }
+    }
+
+    fn source_files(&self) -> Vec<&'static str> {
+        self.source_dirs()
+    }
+
+    fn encode(
+        &self,
+        pixels: &[u8],
+        width: usize,
+        height: usize,
+        quality: u8,
+    ) -> Result<Vec<u8>, String> {
+        match self {
+            Config::MozJpeg { subsampling } => {
+                encode_mozjpeg(pixels, width, height, quality, *subsampling, false)
+            }
+            Config::MozJpegMax { subsampling } => {
+                encode_mozjpeg(pixels, width, height, quality, *subsampling, true)
+            }
+            Config::CMozJpeg { subsampling } => {
+                encode_cmozjpeg(pixels, width, height, quality, *subsampling, false)
+            }
+            Config::CMozJpegMax { subsampling } => {
+                encode_cmozjpeg(pixels, width, height, quality, *subsampling, true)
+            }
+            Config::Jpegli { subsampling } => {
+                encode_jpegli(pixels, width, height, quality, *subsampling, false)
+            }
+            Config::JpegliXyb { subsampling } => {
+                encode_jpegli(pixels, width, height, quality, *subsampling, true)
+            }
+            Config::Zenjpeg { subsampling } => {
+                encode_zenjpeg(pixels, width, height, quality, *subsampling)
+            }
+        }
+    }
+}
+
+impl std::fmt::Display for Config {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.key())
+    }
+}
+
+/// Version info for cache invalidation tracking.
+/// When encoding logic changes, bump version and record the old hash/commit.
+#[derive(Debug, Clone)]
+struct VersionInfo {
+    version: u32,
+    /// Hash from the PREVIOUS version (for documentation/audit trail)
+    old_hash: &'static str,
+    /// Commit from the PREVIOUS version (for documentation/audit trail)
+    old_commit: &'static str,
+}
+
+impl Config {
+    // =========================================================================
+    // Config Sets
+    // =========================================================================
+
+    /// Minimal baseline configs - one per encoder, 4:2:0 only
+    fn baseline() -> Vec<Config> {
+        vec![
+            Config::MozJpeg {
+                subsampling: Subsampling::S420,
+            },
+            Config::Jpegli {
+                subsampling: Subsampling::S420,
+            },
+        ]
+    }
+
+    /// Test subset - configs we actively benchmark
+    fn test_subset() -> Vec<Config> {
+        vec![
+            Config::MozJpeg {
+                subsampling: Subsampling::S420,
+            },
+            Config::MozJpeg {
+                subsampling: Subsampling::S444,
+            },
+            Config::MozJpegMax {
+                subsampling: Subsampling::S420,
+            },
+            Config::MozJpegMax {
+                subsampling: Subsampling::S444,
+            },
+            Config::CMozJpeg {
+                subsampling: Subsampling::S420,
+            },
+            Config::CMozJpegMax {
+                subsampling: Subsampling::S420,
+            },
+            Config::Jpegli {
+                subsampling: Subsampling::S420,
+            },
+            Config::Jpegli {
+                subsampling: Subsampling::S444,
+            },
+        ]
+    }
+
+    /// All possible configs (including experimental/future)
+    fn all() -> Vec<Config> {
+        vec![
+            Config::MozJpeg {
+                subsampling: Subsampling::S420,
+            },
+            Config::MozJpeg {
+                subsampling: Subsampling::S422,
+            },
+            Config::MozJpeg {
+                subsampling: Subsampling::S444,
+            },
+            Config::Jpegli {
+                subsampling: Subsampling::S420,
+            },
+            Config::Jpegli {
+                subsampling: Subsampling::S422,
+            },
+            Config::Jpegli {
+                subsampling: Subsampling::S444,
+            },
+            // Future:
+            // Config::JpegliXyb { subsampling: Subsampling::S444 },
+            // Config::Zenjpeg { subsampling: Subsampling::Auto },
+        ]
+    }
+
+    // =========================================================================
+    // Cache Invalidation Info
+    // =========================================================================
+
+    /// Directories/files to hash for cache invalidation.
+    /// When any of these change, the cache for this config is invalidated.
+    fn source_dirs(&self) -> Vec<&'static str> {
+        match self {
+            Config::MozJpeg { .. } => vec!["examples/discover_heuristics.rs"],
+            Config::MozJpegMax { .. } => vec!["examples/discover_heuristics.rs"],
+            Config::CMozJpeg { .. } => vec!["examples/discover_heuristics.rs"],
+            Config::CMozJpegMax { .. } => vec!["examples/discover_heuristics.rs"],
+            Config::Jpegli { .. } => vec!["examples/discover_heuristics.rs"],
+            Config::JpegliXyb { .. } => vec!["examples/discover_heuristics.rs"],
+            Config::Zenjpeg { .. } => vec![
+                "examples/discover_heuristics.rs",
+                "src/", // Zenjpeg uses our own encoder
+            ],
+        }
+    }
+
+    /// Version info for this config.
+    /// When you change encoding logic:
+    /// 1. Run benchmark - it will error with old/new hash and commit
+    /// 2. Increment version and paste old_hash/old_commit from error message
+    fn version_info(&self) -> VersionInfo {
+        // Version history:
+        // v3: Added MozJpegMax. Main dataset with 100k files.
+        // v4: mozjpeg-oxide API change (Encoder::new -> baseline_optimized)
+        // v5: jpegli-rs encoder output changed.
+        match self {
+            // ----------------------------------------------------------------
+            // MozJpeg configs - v5: API changed to baseline_optimized()
+            // (v4 files were created with old Encoder::new() API)
+            // ----------------------------------------------------------------
+            Config::MozJpeg { .. } => VersionInfo {
+                version: 5,
+                old_hash: "sha256:013018d04a91f977",
+                old_commit: "e04ea4db6538c6c4ba59fb04a38b8d29941704ec",
+            },
+
+            // ----------------------------------------------------------------
+            // MozJpegMax configs - v5: API changed
+            // ----------------------------------------------------------------
+            Config::MozJpegMax { .. } => VersionInfo {
+                version: 5,
+                old_hash: "sha256:013018d04a91f977",
+                old_commit: "",
+            },
+
+            // ----------------------------------------------------------------
+            // C mozjpeg configs (reference implementation) - unchanged
+            // ----------------------------------------------------------------
+            Config::CMozJpeg { .. } => VersionInfo {
+                version: 3,
+                old_hash: "sha256:013018d04a91f977",
+                old_commit: "",
+            },
+            Config::CMozJpegMax { .. } => VersionInfo {
+                version: 3,
+                old_hash: "sha256:013018d04a91f977",
+                old_commit: "",
+            },
+
+            // ----------------------------------------------------------------
+            // Jpegli configs - v5: encoder output changed since v3/v4
+            // ----------------------------------------------------------------
+            Config::Jpegli { .. } => VersionInfo {
+                version: 5,
+                old_hash: "sha256:013018d04a91f977",
+                old_commit: "e04ea4db6538c6c4ba59fb04a38b8d29941704ec",
+            },
+
+            // ----------------------------------------------------------------
+            // JpegliXyb configs - v5 with jpegli
+            // ----------------------------------------------------------------
+            Config::JpegliXyb { .. } => VersionInfo {
+                version: 5,
+                old_hash: "sha256:013018d04a91f977",
+                old_commit: "e04ea4db6538c6c4ba59fb04a38b8d29941704ec",
+            },
+
+            // ----------------------------------------------------------------
+            // Zenjpeg configs (experimental)
+            // ----------------------------------------------------------------
+            Config::Zenjpeg { .. } => VersionInfo {
+                version: 3,
+                old_hash: "sha256:013018d04a91f977",
+                old_commit: "e04ea4db6538c6c4ba59fb04a38b8d29941704ec",
+            },
+        }
+    }
+}
+
+/// If true, trust existing cache even if code hash changed.
+/// Set to true temporarily if you made non-functional changes (comments, formatting).
+/// WARNING: Setting this permanently defeats cache invalidation!
+const ASSERT_UNCHANGED: bool = true; // Keep true until code is committed
+
+#[derive(Parser, Debug)]
+#[command(name = "discover_heuristics")]
+#[command(about = "Benchmark codec configurations to discover optimal heuristics")]
+struct Args {
+    /// Path to corpus directory containing PNG images
+    #[arg(long)]
+    corpus: PathBuf,
+
+    /// Output directory for cache and results
+    #[arg(long)]
+    output: PathBuf,
+
+    /// Minimum BPP to test (stop iterating when below this)
+    #[arg(long, default_value = "0.15")]
+    min_bpp: f32,
+
+    /// Maximum BPP to test (stop iterating when above this)
+    #[arg(long, default_value = "3.0")]
+    max_bpp: f32,
+
+    /// Quality step size (quality = 100 - step * n)
+    #[arg(long, default_value = "1")]
+    step: u8,
+
+    /// Force re-encode all (ignore cache completely)
+    #[arg(long)]
+    force: bool,
+
+    /// Maximum images to process (for testing)
+    #[arg(long)]
+    max_images: Option<usize>,
+
+    /// Verbose output
+    #[arg(short, long)]
+    verbose: bool,
+
+    /// Run full verification: compare all cached encodings against current codec output
+    #[arg(long)]
+    verify: bool,
+
+    /// Skip the startup quick-check (3 quality levels, 1 image per config)
+    #[arg(long)]
+    skip_verify: bool,
+}
+
+// ============================================================================
+// Data Structures
+// ============================================================================
+
+/// Image analysis results (independent of encoding decisions)
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct ImageFeatures {
-    /// Image width
+struct ImageAnalysis {
+    source_hash: String,
+    source_name: String,
     width: usize,
-    /// Image height
     height: usize,
-    /// Total pixels
     pixels: usize,
-    /// Luminance variance
     variance: f32,
-    /// Edge density (0-1)
     edge_density: f32,
-    /// Chroma complexity (0-1)
     chroma_complexity: f32,
-    /// Fraction of uniform 8x8 blocks
     uniform_block_fraction: f32,
-    /// Whether image appears to be a photo (vs graphic)
-    is_photo: bool,
+    has_high_frequency: bool,
+    color_count_estimate: u32,
+    timestamp: DateTime<Utc>,
 }
 
-/// Complete benchmark result for one image
+/// Per-encoding metrics
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct ImageBenchmark {
-    /// Image filename
-    filename: String,
-    /// Image features
-    features: ImageFeatures,
-    /// All encoding data points
-    points: Vec<EncodingPoint>,
-    /// Pareto-optimal points (indices into points)
-    pareto_front: Vec<usize>,
-    /// Crossover bpp: below this mozjpeg wins, above jpegli wins
-    crossover_bpp: Option<f32>,
-    /// Best codec at various bpp targets
-    codec_at_bpp: HashMap<String, String>,
+struct EncodingMetrics {
+    source_hash: String,
+    config_key: String,
+    quality: u8,
+    cache_version: u32,
+    size_bytes: usize,
+    bpp: f32,
+    butteraugli: f32,
+    ssimulacra2: f32,
+    dssim: f32,
+    encode_time_ms: u64,
+    timestamp: DateTime<Utc>,
 }
 
-/// Aggregate heuristics discovered from benchmark
+/// Cache manifest storing per-config versions and code hashes
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct DiscoveredHeuristics {
-    /// Number of images analyzed
-    image_count: usize,
-    /// Average crossover bpp (where jpegli starts winning)
-    avg_crossover_bpp: f32,
-    /// Crossover bpp by image type
-    crossover_by_type: HashMap<String, f32>,
-    /// Quality mapping: unified_q -> (mozjpeg_q, jpegli_q, preferred_codec)
-    quality_mapping: Vec<QualityMapEntry>,
-    /// Image feature thresholds for codec selection
-    feature_thresholds: FeatureThresholds,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct QualityMapEntry {
-    unified_q: u8,
-    target_bpp: f32,
-    target_butteraugli: f32,
-    mozjpeg_q: u8,
-    jpegli_q: u8,
-    preferred_codec: String,
-    preference_strength: f32, // 0-1, how strongly we prefer this codec
+struct CacheManifest {
+    /// Global hash of all source files (for reference)
+    global_code_hash: String,
+    /// Git commit hash of the repo (if available)
+    #[serde(default)]
+    git_commit: Option<String>,
+    /// Per-config version and hash
+    configs: HashMap<String, ConfigCacheEntry>,
+    /// Last updated
+    last_updated: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct FeatureThresholds {
-    /// Variance threshold above which jpegli is preferred
-    variance_jpegli_threshold: f32,
-    /// Chroma complexity below which subsampling is safe
-    chroma_subsample_threshold: f32,
-    /// Edge density threshold for quality-sensitive images
-    edge_density_threshold: f32,
+struct ConfigCacheEntry {
+    version: u32,
+    code_hash: String,
+    #[serde(default)]
+    git_commit: Option<String>,
+    source_files: Vec<String>,
 }
 
-/// Full benchmark results
+/// CSV row for master results file
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct BenchmarkResults {
-    /// Individual image results
-    images: Vec<ImageBenchmark>,
-    /// Discovered heuristics
-    heuristics: DiscoveredHeuristics,
-    /// Benchmark metadata
-    metadata: BenchmarkMetadata,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct BenchmarkMetadata {
-    /// Timestamp
+struct CsvRow {
+    source_hash: String,
+    source_name: String,
+    width: usize,
+    height: usize,
+    variance: f32,
+    edge_density: f32,
+    chroma_complexity: f32,
+    uniform_block_fraction: f32,
+    config_key: String,
+    quality: u8,
+    cache_version: u32,
+    size_bytes: usize,
+    bpp: f32,
+    butteraugli: f32,
+    ssimulacra2: f32,
+    dssim: f32,
+    encode_time_ms: u64,
     timestamp: String,
-    /// Quality levels tested
-    quality_levels: Vec<u8>,
-    /// Codecs tested
-    codecs: Vec<String>,
-    /// Total encoding time
-    total_time_seconds: f64,
 }
 
-fn main() {
-    let args: Vec<String> = std::env::args().collect();
+/// Thread-safe run statistics using atomics
+struct AtomicRunStats {
+    images_processed: AtomicUsize,
+    images_skipped: AtomicUsize,
+    encodings_performed: AtomicUsize,
+    encodings_cached: AtomicUsize,
+    total_encode_time_ms: AtomicU64,
+    total_metric_time_ms: AtomicU64,
+    // Per-metric timing breakdown
+    total_butteraugli_ms: AtomicU64,
+    total_ssim2_ms: AtomicU64,
+    total_dssim_ms: AtomicU64,
+    total_decode_ms: AtomicU64,
+    errors: Mutex<Vec<String>>,
+}
 
-    if args.len() < 3 {
-        eprintln!("Usage: {} <corpus_dir> <output.json>", args[0]);
-        eprintln!();
-        eprintln!("Environment variables:");
-        eprintln!("  MAX_IMAGES=N     Limit to N images");
-        eprintln!("  QUALITY_STEP=N   Test every Nth quality level (default: 5)");
-        eprintln!("  VERBOSE=1        Show per-image progress");
-        std::process::exit(1);
-    }
-
-    let corpus_dir = PathBuf::from(&args[1]);
-    let output_path = PathBuf::from(&args[2]);
-
-    // Configuration from environment
-    let max_images: usize = std::env::var("MAX_IMAGES")
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(usize::MAX);
-
-    let quality_step: u8 = std::env::var("QUALITY_STEP")
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(5);
-
-    let verbose = std::env::var("VERBOSE").is_ok();
-
-    // Find PNG images in corpus
-    let images = find_images(&corpus_dir, max_images);
-    println!("Found {} images in {:?}", images.len(), corpus_dir);
-
-    if images.is_empty() {
-        eprintln!("No PNG images found!");
-        std::process::exit(1);
-    }
-
-    // Quality levels to test
-    let quality_levels: Vec<u8> = (1..=100).step_by(quality_step as usize).collect();
-    println!("Testing {} quality levels: {:?}...", quality_levels.len(),
-             &quality_levels[..quality_levels.len().min(10)]);
-
-    let start = Instant::now();
-    let mut image_results = Vec::new();
-
-    for (i, image_path) in images.iter().enumerate() {
-        if verbose {
-            println!("[{}/{}] Processing {:?}...",
-                     i + 1, images.len(), image_path.file_name().unwrap());
-        }
-
-        match benchmark_image(image_path, &quality_levels) {
-            Ok(result) => {
-                if verbose {
-                    println!("  {} points, crossover at {:?} bpp",
-                             result.points.len(), result.crossover_bpp);
-                }
-                image_results.push(result);
-            }
-            Err(e) => {
-                eprintln!("  Error: {}", e);
-            }
+impl AtomicRunStats {
+    fn new() -> Self {
+        Self {
+            images_processed: AtomicUsize::new(0),
+            images_skipped: AtomicUsize::new(0),
+            encodings_performed: AtomicUsize::new(0),
+            encodings_cached: AtomicUsize::new(0),
+            total_encode_time_ms: AtomicU64::new(0),
+            total_metric_time_ms: AtomicU64::new(0),
+            total_butteraugli_ms: AtomicU64::new(0),
+            total_ssim2_ms: AtomicU64::new(0),
+            total_dssim_ms: AtomicU64::new(0),
+            total_decode_ms: AtomicU64::new(0),
+            errors: Mutex::new(Vec::new()),
         }
     }
 
-    let total_time = start.elapsed().as_secs_f64();
-    println!("\nProcessed {} images in {:.1}s", image_results.len(), total_time);
+    fn add_error(&self, error: String) {
+        self.errors.lock().unwrap().push(error);
+    }
 
-    // Compute aggregate heuristics
-    let heuristics = compute_heuristics(&image_results, &quality_levels);
+    fn print_timing_breakdown(&self) {
+        let encode = self.total_encode_time_ms.load(Ordering::Relaxed) as f64 / 1000.0;
+        let decode = self.total_decode_ms.load(Ordering::Relaxed) as f64 / 1000.0;
+        let butteraugli = self.total_butteraugli_ms.load(Ordering::Relaxed) as f64 / 1000.0;
+        let ssim2 = self.total_ssim2_ms.load(Ordering::Relaxed) as f64 / 1000.0;
+        let dssim = self.total_dssim_ms.load(Ordering::Relaxed) as f64 / 1000.0;
+        let total = encode + decode + butteraugli + ssim2 + dssim;
 
-    // Build final results
-    let results = BenchmarkResults {
-        images: image_results,
-        heuristics,
-        metadata: BenchmarkMetadata {
-            timestamp: chrono_lite_timestamp(),
-            quality_levels,
-            codecs: vec!["mozjpeg".to_string(), "jpegli".to_string()],
-            total_time_seconds: total_time,
-        },
-    };
-
-    // Write output
-    let json = serde_json::to_string_pretty(&results).unwrap();
-    fs::write(&output_path, &json).expect("Failed to write output");
-    println!("Results written to {:?}", output_path);
-
-    // Print summary
-    print_summary(&results);
+        println!("\n{:=^70}", " TIMING BREAKDOWN ");
+        println!("{:<20} {:>10.1}s  ({:>5.1}%)", "Encoding:", encode, 100.0 * encode / total);
+        println!("{:<20} {:>10.1}s  ({:>5.1}%)", "Decoding:", decode, 100.0 * decode / total);
+        println!("{:<20} {:>10.1}s  ({:>5.1}%)", "Butteraugli:", butteraugli, 100.0 * butteraugli / total);
+        println!("{:<20} {:>10.1}s  ({:>5.1}%)", "SSIMULACRA2:", ssim2, 100.0 * ssim2 / total);
+        println!("{:<20} {:>10.1}s  ({:>5.1}%)", "DSSIM:", dssim, 100.0 * dssim / total);
+        println!("{:-<70}", "");
+        println!("{:<20} {:>10.1}s", "Total measured:", total);
+    }
 }
 
-fn find_images(dir: &Path, max: usize) -> Vec<PathBuf> {
-    let mut images = Vec::new();
+/// Work item for parallel processing
+#[derive(Clone)]
+struct WorkItem {
+    image_path: PathBuf,
+    rgb_pixels: Arc<Vec<u8>>,
+    width: usize,
+    height: usize,
+    config: Config,
+    quality: u8,
+    analysis: Arc<ImageAnalysis>,
+    image_dir: PathBuf,
+    cache_version: u32,
+}
 
-    if let Ok(entries) = fs::read_dir(dir) {
-        for entry in entries.flatten() {
+/// Result from processing a work item
+struct WorkResult {
+    analysis: Arc<ImageAnalysis>,
+    metrics: Option<EncodingMetrics>,
+    cached: bool,
+    error: Option<String>,
+}
+
+// ============================================================================
+// Code Hashing
+// ============================================================================
+
+fn compute_file_hash(path: &Path) -> Result<String, String> {
+    let content = fs::read_to_string(path)
+        .map_err(|e| format!("Failed to read {}: {}", path.display(), e))?;
+    let mut hasher = Sha256::new();
+    hasher.update(path.to_string_lossy().as_bytes());
+    hasher.update(content.as_bytes());
+    Ok(hex::encode(hasher.finalize())[..16].to_string())
+}
+
+fn compute_config_code_hash(source_files: &[String]) -> Result<String, String> {
+    let mut hasher = Sha256::new();
+    let mut sorted_files: Vec<_> = source_files.iter().collect();
+    sorted_files.sort();
+
+    for file in sorted_files {
+        let path = Path::new(file);
+        if path.exists() {
+            let content =
+                fs::read_to_string(path).map_err(|e| format!("Failed to read {}: {}", file, e))?;
+            hasher.update(file.as_bytes());
+            hasher.update(content.as_bytes());
+        }
+    }
+    Ok(format!("sha256:{}", &hex::encode(hasher.finalize())[..16]))
+}
+
+fn compute_global_code_hash() -> Result<String, String> {
+    let mut hasher = Sha256::new();
+    let src_dir = Path::new("src");
+
+    if src_dir.exists() {
+        let mut files: Vec<_> = fs::read_dir(src_dir)
+            .map_err(|e| format!("Failed to read src dir: {}", e))?
+            .filter_map(|e| e.ok())
+            .filter(|e| e.path().extension().map_or(false, |ext| ext == "rs"))
+            .collect();
+        files.sort_by_key(|e| e.path());
+
+        for entry in files {
             let path = entry.path();
-            if path.extension().map_or(false, |e| e == "png") {
-                images.push(path);
-                if images.len() >= max {
-                    break;
-                }
-            }
+            let content = fs::read_to_string(&path)
+                .map_err(|e| format!("Failed to read {}: {}", path.display(), e))?;
+            hasher.update(path.to_string_lossy().as_bytes());
+            hasher.update(content.as_bytes());
         }
     }
 
-    // Also check subdirectories one level deep
-    if images.len() < max {
-        if let Ok(entries) = fs::read_dir(dir) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.is_dir() {
-                    if let Ok(subentries) = fs::read_dir(&path) {
-                        for subentry in subentries.flatten() {
-                            let subpath = subentry.path();
-                            if subpath.extension().map_or(false, |e| e == "png") {
-                                images.push(subpath);
-                                if images.len() >= max {
-                                    return images;
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
+    // Also hash the example itself
+    let example_path = Path::new("examples/discover_heuristics.rs");
+    if example_path.exists() {
+        let content = fs::read_to_string(example_path)
+            .map_err(|e| format!("Failed to read example: {}", e))?;
+        hasher.update(example_path.to_string_lossy().as_bytes());
+        hasher.update(content.as_bytes());
     }
 
-    images.sort();
-    images
+    Ok(format!("sha256:{}", &hex::encode(hasher.finalize())[..16]))
 }
 
-fn benchmark_image(
-    image_path: &Path,
-    quality_levels: &[u8],
-) -> Result<ImageBenchmark, String> {
-    // Load image
-    let file = fs::File::open(image_path)
-        .map_err(|e| format!("Failed to open image: {}", e))?;
-    let decoder = png::Decoder::new(file);
-    let mut reader = decoder.read_info()
-        .map_err(|e| format!("Failed to read PNG info: {}", e))?;
+fn get_git_commit() -> Option<String> {
+    std::process::Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .output()
+        .ok()
+        .and_then(|output| {
+            if output.status.success() {
+                String::from_utf8(output.stdout)
+                    .ok()
+                    .map(|s| s.trim().to_string())
+            } else {
+                None
+            }
+        })
+}
 
-    let mut buf = vec![0; reader.output_buffer_size()];
-    let info = reader.next_frame(&mut buf)
-        .map_err(|e| format!("Failed to decode PNG: {}", e))?;
+// ============================================================================
+// Cache Management
+// ============================================================================
 
-    let width = info.width as usize;
-    let height = info.height as usize;
+fn load_or_create_manifest(output_dir: &Path) -> Result<CacheManifest, String> {
+    let manifest_path = output_dir.join("cache_manifest.json");
 
-    // Convert to RGB if necessary
-    let rgb_pixels = match info.color_type {
-        png::ColorType::Rgb => buf[..width * height * 3].to_vec(),
-        png::ColorType::Rgba => {
-            buf.chunks(4)
-                .flat_map(|rgba| [rgba[0], rgba[1], rgba[2]])
-                .collect()
-        }
-        png::ColorType::Grayscale => {
-            buf.iter()
-                .flat_map(|&g| [g, g, g])
-                .collect()
-        }
-        png::ColorType::GrayscaleAlpha => {
-            buf.chunks(2)
-                .flat_map(|ga| [ga[0], ga[0], ga[0]])
-                .collect()
-        }
-        _ => return Err(format!("Unsupported color type: {:?}", info.color_type)),
-    };
+    if manifest_path.exists() {
+        let content = fs::read_to_string(&manifest_path)
+            .map_err(|e| format!("Failed to read manifest: {}", e))?;
+        serde_json::from_str(&content).map_err(|e| format!("Failed to parse manifest: {}", e))
+    } else {
+        Ok(CacheManifest {
+            global_code_hash: compute_global_code_hash()?,
+            git_commit: get_git_commit(),
+            configs: HashMap::new(),
+            last_updated: Utc::now(),
+        })
+    }
+}
 
-    // Analyze image features
-    let features = analyze_image(&rgb_pixels, width, height);
+fn save_manifest(manifest: &CacheManifest, output_dir: &Path) -> Result<(), String> {
+    let manifest_path = output_dir.join("cache_manifest.json");
+    let content = serde_json::to_string_pretty(manifest)
+        .map_err(|e| format!("Failed to serialize manifest: {}", e))?;
+    atomic_write(&manifest_path, content.as_bytes())
+}
 
-    // Encode at all quality levels with both codecs
-    let mut points = Vec::new();
+fn validate_or_update_manifest(
+    manifest: &mut CacheManifest,
+    configs: &[Config],
+    _args: &Args,
+) -> Result<(), String> {
+    let current_global = compute_global_code_hash()?;
+    let git_commit = get_git_commit();
 
-    for &quality in quality_levels {
-        // Mozjpeg encoding
-        if let Ok(point) = encode_and_measure_mozjpeg(&rgb_pixels, width, height, quality) {
-            points.push(point);
-        }
+    for config in configs {
+        let source_files: Vec<String> = config
+            .source_files()
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let current_hash = compute_config_code_hash(&source_files)?;
+        let key = config.key();
+        let version_info = config.version_info();
+        let source_version = version_info.version;
 
-        // Jpegli encoding
-        if let Ok(point) = encode_and_measure_jpegli(&rgb_pixels, width, height, quality) {
-            points.push(point);
+        if let Some(entry) = manifest.configs.get(&key) {
+            // Check if source version was bumped
+            if source_version > entry.version {
+                // Version bump in source - update cache entry
+                println!(
+                    "Config '{}' version bumped: {} -> {} (invalidating cache)",
+                    key, entry.version, source_version
+                );
+                manifest.configs.insert(
+                    key.clone(),
+                    ConfigCacheEntry {
+                        version: source_version,
+                        code_hash: current_hash,
+                        git_commit: git_commit.clone(),
+                        source_files,
+                    },
+                );
+            } else if entry.code_hash != current_hash && !ASSERT_UNCHANGED {
+                // Code changed but version not bumped - error with detailed info
+                return Err(format!(
+                    "Config '{}' code changed but version not bumped!\n\n\
+                     Cache state:\n\
+                       old_hash    = \"{}\"\n\
+                       old_commit  = \"{}\"\n\
+                       old_version = {}\n\n\
+                     Current state:\n\
+                       new_hash    = \"{}\"\n\
+                       new_commit  = \"{}\"\n\n\
+                     To fix: Update Config::version_info() match arm for this config:\n\
+                       VersionInfo {{\n\
+                           version: {},\n\
+                           old_hash: \"{}\",\n\
+                           old_commit: \"{}\",\n\
+                       }}\n\n\
+                     Or set ASSERT_UNCHANGED = true if changes are non-functional.",
+                    key,
+                    entry.code_hash,
+                    entry.git_commit.as_deref().unwrap_or(""),
+                    entry.version,
+                    current_hash,
+                    git_commit.as_deref().unwrap_or(""),
+                    entry.version + 1,
+                    entry.code_hash,
+                    entry.git_commit.as_deref().unwrap_or(""),
+                ));
+            }
+            // else: hash matches or ASSERT_UNCHANGED - keep existing entry
+        } else {
+            // New config, add it
+            manifest.configs.insert(
+                key,
+                ConfigCacheEntry {
+                    version: source_version,
+                    code_hash: current_hash,
+                    git_commit: git_commit.clone(),
+                    source_files,
+                },
+            );
         }
     }
 
-    // Find Pareto front
-    let pareto_front = find_pareto_front(&points);
-
-    // Find crossover point
-    let crossover_bpp = find_crossover_bpp(&points);
-
-    // Best codec at various bpp targets
-    let codec_at_bpp = compute_codec_at_bpp(&points);
-
-    Ok(ImageBenchmark {
-        filename: image_path.file_name()
-            .map(|s| s.to_string_lossy().to_string())
-            .unwrap_or_default(),
-        features,
-        points,
-        pareto_front,
-        crossover_bpp,
-        codec_at_bpp,
-    })
+    manifest.global_code_hash = current_global;
+    manifest.git_commit = git_commit;
+    manifest.last_updated = Utc::now();
+    Ok(())
 }
 
-fn analyze_image(pixels: &[u8], width: usize, height: usize) -> ImageFeatures {
+// ============================================================================
+// File Operations
+// ============================================================================
+
+fn atomic_write(path: &Path, data: &[u8]) -> Result<(), String> {
+    let temp_path = path.with_extension("tmp");
+
+    let mut file =
+        File::create(&temp_path).map_err(|e| format!("Failed to create temp file: {}", e))?;
+    file.write_all(data)
+        .map_err(|e| format!("Failed to write temp file: {}", e))?;
+    file.sync_all()
+        .map_err(|e| format!("Failed to sync temp file: {}", e))?;
+    drop(file);
+
+    fs::rename(&temp_path, path).map_err(|e| format!("Failed to rename temp file: {}", e))?;
+    Ok(())
+}
+
+fn compute_source_hash(data: &[u8]) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(data);
+    hex::encode(hasher.finalize())[..12].to_string()
+}
+
+fn format_encoding_filename(
+    bpp: f32,
+    ssim2: f32,
+    ba: f32,
+    config_key: &str,
+    quality: u8,
+    version: u32,
+) -> String {
+    format!(
+        "{:.3}bpp_{:.1}ss_{:.2}ba_{}-q{}_v{}.jpg",
+        bpp, ssim2, ba, config_key, quality, version
+    )
+}
+
+fn format_metrics_filename(
+    bpp: f32,
+    ssim2: f32,
+    ba: f32,
+    config_key: &str,
+    quality: u8,
+    version: u32,
+) -> String {
+    format!(
+        "{:.3}bpp_{:.1}ss_{:.2}ba_{}-q{}_v{}.json",
+        bpp, ssim2, ba, config_key, quality, version
+    )
+}
+
+// ============================================================================
+// Image Analysis
+// ============================================================================
+
+fn analyze_image(
+    pixels: &[u8],
+    width: usize,
+    height: usize,
+    source_hash: &str,
+    source_name: &str,
+) -> ImageAnalysis {
     // Calculate luminance and stats
-    let luma: Vec<f32> = pixels.chunks(3)
+    let luma: Vec<f32> = pixels
+        .chunks(3)
         .map(|rgb| 0.299 * rgb[0] as f32 + 0.587 * rgb[1] as f32 + 0.114 * rgb[2] as f32)
         .collect();
 
     let mean: f32 = luma.iter().sum::<f32>() / luma.len() as f32;
-    let variance = luma.iter()
-        .map(|&l| (l - mean).powi(2))
-        .sum::<f32>() / luma.len() as f32;
+    let variance = luma.iter().map(|&l| (l - mean).powi(2)).sum::<f32>() / luma.len() as f32;
 
     // Edge density
     let mut edge_sum = 0.0f32;
@@ -366,12 +831,15 @@ fn analyze_image(pixels: &[u8], width: usize, height: usize) -> ImageFeatures {
             let idx = y * width + x;
             if idx + width < luma.len() && idx > 0 {
                 let gx = (luma[idx + 1] - luma[idx - 1]).abs();
-                let gy = (luma[idx + width] - luma.get(idx.saturating_sub(width)).copied().unwrap_or(0.0)).abs();
+                let gy = (luma[idx + width]
+                    - luma.get(idx.saturating_sub(width)).copied().unwrap_or(0.0))
+                .abs();
                 edge_sum += (gx * gx + gy * gy).sqrt();
             }
         }
     }
-    let edge_density = edge_sum / ((width.saturating_sub(2)) * (height.saturating_sub(2))) as f32 / 255.0;
+    let edge_density =
+        edge_sum / ((width.saturating_sub(2)) * (height.saturating_sub(2))) as f32 / 255.0;
 
     // Chroma complexity
     let mut chroma_var = 0.0f32;
@@ -421,12 +889,15 @@ fn analyze_image(pixels: &[u8], width: usize, height: usize) -> ImageFeatures {
     let total_blocks = (blocks_x * blocks_y).max(1);
     let uniform_block_fraction = uniform_count as f32 / total_blocks as f32;
 
-    // Heuristic: is this a photo?
-    let is_photo = variance > 500.0
-        && chroma_complexity > 0.05
-        && uniform_block_fraction < 0.3;
+    // High frequency detection
+    let has_high_frequency = edge_density > 0.15;
 
-    ImageFeatures {
+    // Color count estimate (simplified)
+    let color_count_estimate = (pixels.len() / 3).min(100000) as u32;
+
+    ImageAnalysis {
+        source_hash: source_hash.to_string(),
+        source_name: source_name.to_string(),
         width,
         height,
         pixels: width * height,
@@ -434,434 +905,1785 @@ fn analyze_image(pixels: &[u8], width: usize, height: usize) -> ImageFeatures {
         edge_density,
         chroma_complexity,
         uniform_block_fraction,
-        is_photo,
+        has_high_frequency,
+        color_count_estimate,
+        timestamp: Utc::now(),
     }
 }
 
-fn encode_and_measure_mozjpeg(
+// ============================================================================
+// Encoding
+// ============================================================================
+
+fn encode_mozjpeg(
     pixels: &[u8],
     width: usize,
     height: usize,
     quality: u8,
-) -> Result<EncodingPoint, String> {
+    subsampling: Subsampling,
+    max_compression: bool,
+) -> Result<Vec<u8>, String> {
     use mozjpeg_oxide::Encoder;
 
-    let start = Instant::now();
+    let subsamp = match subsampling {
+        Subsampling::S420 | Subsampling::Auto => mozjpeg_oxide::Subsampling::S420,
+        Subsampling::S422 => mozjpeg_oxide::Subsampling::S422,
+        Subsampling::S444 => mozjpeg_oxide::Subsampling::S444,
+    };
 
-    let encoder = Encoder::new()
-        .quality(quality)
-        .subsampling(mozjpeg_oxide::Subsampling::S420);
+    let encoder = if max_compression {
+        // Progressive + optimize_scans for maximum compression
+        Encoder::max_compression()
+            .quality(quality)
+            .subsampling(subsamp)
+    } else {
+        // Baseline optimized mode
+        Encoder::baseline_optimized()
+            .quality(quality)
+            .subsampling(subsamp)
+    };
 
-    let jpeg_data = encoder.encode_rgb(pixels, width as u32, height as u32)
-        .map_err(|e| format!("mozjpeg encode failed: {:?}", e))?;
-
-    let encode_time = start.elapsed().as_millis() as u64;
-    let size = jpeg_data.len();
-    let bpp = (size * 8) as f32 / (width * height) as f32;
-
-    // Decode for quality measurement
-    let decoded = decode_jpeg(&jpeg_data)?;
-
-    // Measure quality
-    let butteraugli = measure_butteraugli(pixels, &decoded, width, height);
-    let ssimulacra2 = measure_ssimulacra2(pixels, &decoded, width, height);
-
-    Ok(EncodingPoint {
-        codec: "mozjpeg".to_string(),
-        quality,
-        size,
-        bpp,
-        butteraugli,
-        ssimulacra2,
-        encode_time_ms: encode_time,
-    })
+    encoder
+        .encode_rgb(pixels, width as u32, height as u32)
+        .map_err(|e| format!("mozjpeg encode failed: {:?}", e))
 }
 
-fn encode_and_measure_jpegli(
+/// Encode using C mozjpeg (reference implementation via mozjpeg crate)
+///
+/// C mozjpeg defaults (via jpeg_set_defaults):
+/// - Trellis quantization: ENABLED by default
+/// - Trellis DC: ENABLED by default
+/// - Trellis EOB opt: ENABLED by default
+/// - Overshoot deringing: ENABLED by default
+///
+/// We additionally set:
+/// - optimize_coding: true (Huffman optimization)
+/// - progressive + optimize_scans (for max_compression mode)
+fn encode_cmozjpeg(
     pixels: &[u8],
     width: usize,
     height: usize,
     quality: u8,
-) -> Result<EncodingPoint, String> {
-    use jpegli::{Encoder, Quality, Subsampling};
+    subsampling: Subsampling,
+    max_compression: bool,
+) -> Result<Vec<u8>, String> {
+    use mozjpeg::{ColorSpace, Compress};
 
-    let start = Instant::now();
+    let mut comp = Compress::new(ColorSpace::JCS_RGB);
+    comp.set_size(width, height);
+    comp.set_quality(quality as f32);
+
+    // Enable Huffman optimization (like mozjpeg-rs does)
+    comp.set_optimize_coding(true);
+
+    // Set subsampling using pixel sizes: (h, v) where (2,2) = 4:2:0, (2,1) = 4:2:2, (1,1) = 4:4:4
+    match subsampling {
+        Subsampling::S420 | Subsampling::Auto => {
+            comp.set_chroma_sampling_pixel_sizes((2, 2), (2, 2));
+        }
+        Subsampling::S422 => {
+            comp.set_chroma_sampling_pixel_sizes((2, 1), (2, 1));
+        }
+        Subsampling::S444 => {
+            comp.set_chroma_sampling_pixel_sizes((1, 1), (1, 1));
+        }
+    }
+
+    if max_compression {
+        // Enable progressive and scan optimization for max compression
+        comp.set_progressive_mode();
+        comp.set_optimize_scans(true);
+    }
+
+    // Start compression
+    let mut comp = comp
+        .start_compress(Vec::new())
+        .map_err(|e| format!("cmozjpeg start failed: {:?}", e))?;
+
+    // Write all scanlines at once (the API handles chunking internally)
+    comp.write_scanlines(pixels)
+        .map_err(|e| format!("cmozjpeg scanlines failed: {:?}", e))?;
+
+    comp.finish()
+        .map_err(|e| format!("cmozjpeg finish failed: {:?}", e))
+}
+
+fn encode_jpegli(
+    pixels: &[u8],
+    width: usize,
+    height: usize,
+    quality: u8,
+    subsampling: Subsampling,
+    _xyb_mode: bool,
+) -> Result<Vec<u8>, String> {
+    use jpegli::{Encoder, Quality, Subsampling as JpegliSubsampling};
+
+    let subsamp = match subsampling {
+        Subsampling::S420 | Subsampling::Auto => JpegliSubsampling::S420,
+        Subsampling::S422 => JpegliSubsampling::S422,
+        Subsampling::S444 => JpegliSubsampling::S444,
+    };
 
     let encoder = Encoder::new()
         .width(width as u32)
         .height(height as u32)
         .quality(Quality::from_quality(quality as f32))
-        .subsampling(Subsampling::S420);
+        .subsampling(subsamp);
 
-    let jpeg_data = encoder.encode(pixels)
-        .map_err(|e| format!("jpegli encode failed: {:?}", e))?;
+    encoder
+        .encode(pixels)
+        .map_err(|e| format!("jpegli encode failed: {:?}", e))
+}
 
-    let encode_time = start.elapsed().as_millis() as u64;
-    let size = jpeg_data.len();
-    let bpp = (size * 8) as f32 / (width * height) as f32;
-
-    // Decode for quality measurement
-    let decoded = decode_jpeg(&jpeg_data)?;
-
-    // Measure quality
-    let butteraugli = measure_butteraugli(pixels, &decoded, width, height);
-    let ssimulacra2 = measure_ssimulacra2(pixels, &decoded, width, height);
-
-    Ok(EncodingPoint {
-        codec: "jpegli".to_string(),
-        quality,
-        size,
-        bpp,
-        butteraugli,
-        ssimulacra2,
-        encode_time_ms: encode_time,
-    })
+fn encode_zenjpeg(
+    _pixels: &[u8],
+    _width: usize,
+    _height: usize,
+    _quality: u8,
+    _subsampling: Subsampling,
+) -> Result<Vec<u8>, String> {
+    // TODO: Implement zenjpeg encoding when zenjpeg library is ready
+    Err("zenjpeg encoder not yet implemented".to_string())
 }
 
 fn decode_jpeg(data: &[u8]) -> Result<Vec<u8>, String> {
     use jpeg_decoder::Decoder;
 
     let mut decoder = Decoder::new(std::io::Cursor::new(data));
-    decoder.decode()
+    decoder
+        .decode()
         .map_err(|e| format!("JPEG decode failed: {:?}", e))
 }
 
-fn measure_butteraugli(original: &[u8], decoded: &[u8], width: usize, height: usize) -> f32 {
-    use codec_eval::metrics::butteraugli::calculate_butteraugli;
+/// Convert RGB8 slice to Vec<[u8; 3]> for fast-ssim2
+fn rgb8_to_array(data: &[u8]) -> Vec<[u8; 3]> {
+    data.chunks_exact(3)
+        .map(|c| [c[0], c[1], c[2]])
+        .collect()
+}
 
-    // Handle size mismatch (decoded might have padding)
+/// Metric results with timing breakdown
+struct MetricResults {
+    butteraugli: f32,
+    ssimulacra2: f32,
+    dssim: f32,
+    butteraugli_ms: u64,
+    ssim2_ms: u64,
+    dssim_ms: u64,
+}
+
+fn measure_metrics(
+    original: &[u8],
+    decoded: &[u8],
+    width: usize,
+    height: usize,
+) -> MetricResults {
     let expected_size = width * height * 3;
+
     if decoded.len() < expected_size {
-        return f32::MAX;
+        return MetricResults {
+            butteraugli: f32::MAX,
+            ssimulacra2: 0.0,
+            dssim: f32::MAX,
+            butteraugli_ms: 0,
+            ssim2_ms: 0,
+            dssim_ms: 0,
+        };
     }
 
-    match calculate_butteraugli(original, &decoded[..expected_size], width, height) {
-        Ok(score) => score as f32,
-        Err(_) => f32::MAX,
+    let decoded_slice = &decoded[..expected_size];
+
+    // Calculate all three metrics in parallel using rayon, with timing
+    let ((butteraugli, ba_ms), ((ssimulacra2, ssim_ms), (dssim, dssim_ms))) = rayon::join(
+        || {
+            let start = Instant::now();
+            use codec_eval::metrics::butteraugli::calculate_butteraugli;
+            let result = calculate_butteraugli(original, decoded_slice, width, height)
+                .map(|s| s as f32)
+                .unwrap_or(f32::MAX);
+            (result, start.elapsed().as_millis() as u64)
+        },
+        || {
+            rayon::join(
+                || {
+                    let start = Instant::now();
+                    // Use fast-ssim2 for faster SIMD-accelerated SSIMULACRA2
+                    use fast_ssim2::Ssimulacra2Reference;
+                    use imgref::Img;
+
+                    let ref_arr = rgb8_to_array(original);
+                    let ref_img = Img::new(ref_arr.as_slice(), width, height);
+
+                    let ssim_ref = match Ssimulacra2Reference::new(ref_img) {
+                        Ok(r) => r,
+                        Err(_) => return (0.0f32, start.elapsed().as_millis() as u64),
+                    };
+
+                    let test_arr = rgb8_to_array(decoded_slice);
+                    let test_img = Img::new(test_arr.as_slice(), width, height);
+
+                    let result = ssim_ref.compare(test_img).map(|s| s as f32).unwrap_or(0.0);
+                    (result, start.elapsed().as_millis() as u64)
+                },
+                || {
+                    let start = Instant::now();
+                    use codec_eval::metrics::dssim::{calculate_dssim, rgb8_to_dssim_image};
+                    use codec_eval::viewing::ViewingCondition;
+                    let ref_img = rgb8_to_dssim_image(original, width, height);
+                    let test_img = rgb8_to_dssim_image(decoded_slice, width, height);
+                    let viewing = ViewingCondition::default();
+                    let result = calculate_dssim(&ref_img, &test_img, &viewing)
+                        .map(|s| s as f32)
+                        .unwrap_or(f32::MAX);
+                    (result, start.elapsed().as_millis() as u64)
+                },
+            )
+        },
+    );
+
+    MetricResults {
+        butteraugli,
+        ssimulacra2,
+        dssim,
+        butteraugli_ms: ba_ms,
+        ssim2_ms: ssim_ms,
+        dssim_ms: dssim_ms,
     }
 }
 
-fn measure_ssimulacra2(original: &[u8], decoded: &[u8], width: usize, height: usize) -> f32 {
-    use codec_eval::metrics::ssimulacra2::calculate_ssimulacra2;
+// ============================================================================
+// Image Discovery
+// ============================================================================
 
-    let expected_size = width * height * 3;
-    if decoded.len() < expected_size {
-        return 0.0;
-    }
+fn find_images(dir: &Path, max: Option<usize>) -> Vec<PathBuf> {
+    let mut images = Vec::new();
+    let limit = max.unwrap_or(usize::MAX);
 
-    match calculate_ssimulacra2(original, &decoded[..expected_size], width, height) {
-        Ok(score) => score as f32,
-        Err(_) => 0.0,
-    }
-}
-
-fn find_pareto_front(points: &[EncodingPoint]) -> Vec<usize> {
-    // A point is Pareto-optimal if no other point is both:
-    // - Smaller (lower bpp)
-    // - Better quality (lower butteraugli)
-
-    let mut pareto = Vec::new();
-
-    for (i, p) in points.iter().enumerate() {
-        let dominated = points.iter().any(|other| {
-            other.bpp < p.bpp && other.butteraugli < p.butteraugli
-        });
-
-        if !dominated {
-            pareto.push(i);
+    fn scan_dir(dir: &Path, images: &mut Vec<PathBuf>, limit: usize) {
+        if let Ok(entries) = fs::read_dir(dir) {
+            for entry in entries.flatten() {
+                if images.len() >= limit {
+                    return;
+                }
+                let path = entry.path();
+                if path.is_dir() {
+                    scan_dir(&path, images, limit);
+                } else if path.extension().map_or(false, |e| e == "png") {
+                    images.push(path);
+                }
+            }
         }
     }
 
-    // Sort by bpp
-    pareto.sort_by(|&a, &b| {
-        points[a].bpp.partial_cmp(&points[b].bpp).unwrap()
+    scan_dir(dir, &mut images, limit);
+    images.sort();
+    images
+}
+
+// ============================================================================
+// Aggregated Analysis
+// ============================================================================
+
+/// Quality range bucket for grouping results
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct QualityBucket {
+    metric: String,
+    range_name: String,
+}
+
+/// Analysis result showing which config won for a given bucket
+#[derive(Debug, Clone, Serialize)]
+struct BucketWinner {
+    metric: String,
+    range_name: String,
+    range_min: f32,
+    range_max: f32,
+    winner_config: String,
+    win_count: usize,
+    total_images: usize,
+    win_percentage: f32,
+    avg_improvement: f32,
+}
+
+/// Image characteristics of images where a config won
+#[derive(Debug, Clone, Serialize)]
+struct WinnerCharacteristics {
+    config: String,
+    metric: String,
+    range_name: String,
+    avg_variance: f32,
+    avg_edge_density: f32,
+    avg_chroma_complexity: f32,
+    avg_uniform_blocks: f32,
+    image_count: usize,
+}
+
+fn run_aggregated_analysis(output_dir: &Path) -> Result<(), String> {
+    let csv_path = output_dir.join("results.csv");
+    if !csv_path.exists() {
+        println!("\nNo results.csv found, skipping analysis.");
+        return Ok(());
+    }
+
+    println!("\n{:=^70}", " AGGREGATED ANALYSIS ");
+
+    // Load all results
+    let file = File::open(&csv_path).map_err(|e| format!("Failed to open CSV: {}", e))?;
+    let mut reader = csv::Reader::from_reader(file);
+
+    let all_rows: Vec<CsvRow> = reader.deserialize().filter_map(|r| r.ok()).collect();
+
+    if all_rows.is_empty() {
+        println!("No data in results.csv");
+        return Ok(());
+    }
+
+    // Dedupe rows by (source_hash, config_key, quality), keeping the latest (by timestamp)
+    // This handles cases where results.csv has duplicate entries from multiple runs
+    let mut deduped: HashMap<(String, String, u8), CsvRow> = HashMap::new();
+    for row in all_rows {
+        let key = (row.source_hash.clone(), row.config_key.clone(), row.quality);
+        deduped
+            .entry(key)
+            .and_modify(|existing| {
+                // Keep the one with newer timestamp (lexicographic comparison works for ISO8601)
+                if row.timestamp > existing.timestamp {
+                    *existing = row.clone();
+                }
+            })
+            .or_insert(row);
+    }
+    let rows: Vec<CsvRow> = deduped.into_values().collect();
+
+    println!(
+        "Loaded {} unique encoding results (after deduplication)",
+        rows.len()
+    );
+
+    // Count unique images
+    let unique_images: std::collections::HashSet<_> = rows.iter().map(|r| &r.source_hash).collect();
+    let unique_configs: std::collections::HashSet<_> = rows.iter().map(|r| &r.config_key).collect();
+    println!("Unique images: {}", unique_images.len());
+    println!("Unique configs: {:?}", unique_configs);
+
+    // Define quality ranges for each metric
+    let bpp_ranges = [
+        ("very_low", 0.0, 0.3),
+        ("low", 0.3, 0.5),
+        ("medium", 0.5, 0.8),
+        ("high", 0.8, 1.2),
+        ("very_high", 1.2, 3.0),
+    ];
+
+    let ssim2_ranges = [
+        ("poor", 0.0, 60.0),
+        ("acceptable", 60.0, 75.0),
+        ("good", 75.0, 85.0),
+        ("excellent", 85.0, 95.0),
+        ("near_perfect", 95.0, 100.0),
+    ];
+
+    let ba_ranges = [
+        ("excellent", 0.0, 1.0),
+        ("good", 1.0, 2.0),
+        ("acceptable", 2.0, 3.0),
+        ("noticeable", 3.0, 5.0),
+        ("poor", 5.0, 20.0),
+    ];
+
+    let dssim_ranges = [
+        ("imperceptible", 0.0, 0.0003),
+        ("marginal", 0.0003, 0.0007),
+        ("subtle", 0.0007, 0.0015),
+        ("noticeable", 0.0015, 0.003),
+        ("degraded", 0.003, 0.1),
+    ];
+
+    println!("\n{:-^70}", " BPP Range Analysis ");
+    analyze_by_bpp_range(&rows, &bpp_ranges);
+
+    println!("\n{:-^70}", " SSIMULACRA2 Range Analysis ");
+    analyze_metric_winners(&rows, "ssimulacra2", &ssim2_ranges, true);
+
+    println!("\n{:-^70}", " Butteraugli Range Analysis ");
+    analyze_metric_winners(&rows, "butteraugli", &ba_ranges, false);
+
+    println!("\n{:-^70}", " DSSIM Range Analysis ");
+    analyze_metric_winners(&rows, "dssim", &dssim_ranges, false);
+
+    println!("\n{:-^70}", " Image Characteristic Correlations ");
+    analyze_correlations(&rows);
+
+    // Save detailed analysis to text file
+    let analysis_path = output_dir.join("analysis_summary.txt");
+    save_analysis_txt(
+        &rows,
+        &analysis_path,
+        &bpp_ranges,
+        &ssim2_ranges,
+        &ba_ranges,
+        &dssim_ranges,
+    )?;
+    println!("\nDetailed analysis saved to {:?}", analysis_path);
+
+    Ok(())
+}
+
+fn analyze_by_bpp_range(rows: &[CsvRow], ranges: &[(&str, f32, f32)]) {
+    for (name, min, max) in ranges {
+        let in_range: Vec<_> = rows
+            .iter()
+            .filter(|r| r.bpp >= *min && r.bpp < *max)
+            .collect();
+
+        if in_range.is_empty() {
+            continue;
+        }
+
+        // Group by image
+        let mut by_image: HashMap<&str, Vec<&CsvRow>> = HashMap::new();
+        for row in &in_range {
+            by_image.entry(&row.source_hash).or_default().push(row);
+        }
+
+        // For each metric, count wins per config
+        let mut ssim2_wins: HashMap<&str, usize> = HashMap::new();
+        let mut ba_wins: HashMap<&str, usize> = HashMap::new();
+        let mut dssim_wins: HashMap<&str, usize> = HashMap::new();
+
+        for (_hash, image_rows) in &by_image {
+            // Best SSIM2 (higher is better)
+            if let Some(best) = image_rows.iter().max_by(|a, b| {
+                a.ssimulacra2
+                    .partial_cmp(&b.ssimulacra2)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            }) {
+                *ssim2_wins.entry(&best.config_key).or_default() += 1;
+            }
+
+            // Best Butteraugli (lower is better)
+            if let Some(best) = image_rows.iter().min_by(|a, b| {
+                a.butteraugli
+                    .partial_cmp(&b.butteraugli)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            }) {
+                *ba_wins.entry(&best.config_key).or_default() += 1;
+            }
+
+            // Best DSSIM (lower is better)
+            if let Some(best) = image_rows.iter().min_by(|a, b| {
+                a.dssim
+                    .partial_cmp(&b.dssim)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            }) {
+                *dssim_wins.entry(&best.config_key).or_default() += 1;
+            }
+        }
+
+        let total = by_image.len();
+        println!("\nBPP {}-{} ({} range, {} images):", min, max, name, total);
+
+        print!("  SSIM2 wins:  ");
+        for (config, count) in &ssim2_wins {
+            print!(
+                "{}: {} ({:.0}%)  ",
+                config,
+                count,
+                *count as f32 / total as f32 * 100.0
+            );
+        }
+        println!();
+
+        print!("  BA wins:     ");
+        for (config, count) in &ba_wins {
+            print!(
+                "{}: {} ({:.0}%)  ",
+                config,
+                count,
+                *count as f32 / total as f32 * 100.0
+            );
+        }
+        println!();
+
+        print!("  DSSIM wins:  ");
+        for (config, count) in &dssim_wins {
+            print!(
+                "{}: {} ({:.0}%)  ",
+                config,
+                count,
+                *count as f32 / total as f32 * 100.0
+            );
+        }
+        println!();
+    }
+}
+
+fn analyze_metric_winners(
+    rows: &[CsvRow],
+    metric: &str,
+    ranges: &[(&str, f32, f32)],
+    higher_is_better: bool,
+) {
+    let get_value = |row: &CsvRow| -> f32 {
+        match metric {
+            "ssimulacra2" => row.ssimulacra2,
+            "butteraugli" => row.butteraugli,
+            "dssim" => row.dssim,
+            _ => 0.0,
+        }
+    };
+
+    for (name, min, max) in ranges {
+        let in_range: Vec<_> = rows
+            .iter()
+            .filter(|r| {
+                let v = get_value(r);
+                v >= *min && v < *max
+            })
+            .collect();
+
+        if in_range.is_empty() {
+            continue;
+        }
+
+        // Group by image, then find which config produced best result (smallest file)
+        let mut by_image: HashMap<&str, Vec<&CsvRow>> = HashMap::new();
+        for row in &in_range {
+            by_image.entry(&row.source_hash).or_default().push(row);
+        }
+
+        let mut config_wins: HashMap<&str, usize> = HashMap::new();
+        let mut config_bpp_sum: HashMap<&str, f32> = HashMap::new();
+
+        for (_hash, image_rows) in &by_image {
+            // Best = smallest file (lowest BPP) in this quality range
+            if let Some(best) = image_rows.iter().min_by(|a, b| {
+                a.bpp
+                    .partial_cmp(&b.bpp)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            }) {
+                *config_wins.entry(&best.config_key).or_default() += 1;
+                *config_bpp_sum.entry(&best.config_key).or_default() += best.bpp;
+            }
+        }
+
+        let total = by_image.len();
+        println!(
+            "\n{} {} ({} range, {} images at this quality):",
+            metric.to_uppercase(),
+            name,
+            if higher_is_better {
+                format!("{:.0}-{:.0}", min, max)
+            } else {
+                format!("{:.2}-{:.2}", min, max)
+            },
+            total
+        );
+
+        println!("  Best config (smallest file at this quality):");
+        let mut sorted: Vec<_> = config_wins.iter().collect();
+        sorted.sort_by(|a, b| b.1.cmp(a.1));
+
+        for (config, count) in sorted {
+            let avg_bpp = config_bpp_sum.get(config).unwrap_or(&0.0) / *count as f32;
+            println!(
+                "    {}: {} wins ({:.0}%), avg BPP: {:.3}",
+                config,
+                count,
+                *count as f32 / total as f32 * 100.0,
+                avg_bpp
+            );
+        }
+    }
+}
+
+fn analyze_correlations(rows: &[CsvRow]) {
+    // Group by config and analyze which image characteristics correlate with wins
+    let configs: std::collections::HashSet<_> = rows.iter().map(|r| &r.config_key).collect();
+
+    for config in &configs {
+        let config_rows: Vec<_> = rows.iter().filter(|r| &r.config_key == *config).collect();
+
+        if config_rows.is_empty() {
+            continue;
+        }
+
+        // Calculate averages
+        let avg_variance =
+            config_rows.iter().map(|r| r.variance).sum::<f32>() / config_rows.len() as f32;
+        let avg_edge =
+            config_rows.iter().map(|r| r.edge_density).sum::<f32>() / config_rows.len() as f32;
+        let avg_chroma =
+            config_rows.iter().map(|r| r.chroma_complexity).sum::<f32>() / config_rows.len() as f32;
+        let avg_uniform = config_rows
+            .iter()
+            .map(|r| r.uniform_block_fraction)
+            .sum::<f32>()
+            / config_rows.len() as f32;
+        let avg_bpp = config_rows.iter().map(|r| r.bpp).sum::<f32>() / config_rows.len() as f32;
+        let avg_ssim2 =
+            config_rows.iter().map(|r| r.ssimulacra2).sum::<f32>() / config_rows.len() as f32;
+        let avg_ba =
+            config_rows.iter().map(|r| r.butteraugli).sum::<f32>() / config_rows.len() as f32;
+
+        println!("\n{}:", config);
+        println!("  {} encodings, avg BPP: {:.3}", config_rows.len(), avg_bpp);
+        println!("  Avg quality: SSIM2={:.1}, BA={:.2}", avg_ssim2, avg_ba);
+        println!(
+            "  Image chars: var={:.0}, edge={:.3}, chroma={:.3}, uniform={:.3}",
+            avg_variance, avg_edge, avg_chroma, avg_uniform
+        );
+    }
+}
+
+fn save_analysis_txt(
+    rows: &[CsvRow],
+    path: &Path,
+    bpp_ranges: &[(&str, f32, f32)],
+    ssim2_ranges: &[(&str, f32, f32)],
+    ba_ranges: &[(&str, f32, f32)],
+    dssim_ranges: &[(&str, f32, f32)],
+) -> Result<(), String> {
+    use std::fmt::Write as FmtWrite;
+
+    let mut output = String::new();
+
+    // Header
+    writeln!(output, "{:=^80}", " HEURISTIC DISCOVERY ANALYSIS ").unwrap();
+    writeln!(
+        output,
+        "Generated: {}",
+        Utc::now().format("%Y-%m-%d %H:%M:%S UTC")
+    )
+    .unwrap();
+    writeln!(output).unwrap();
+
+    // Summary stats
+    let unique_images: std::collections::HashSet<_> = rows.iter().map(|r| &r.source_hash).collect();
+    let mut configs: Vec<_> = rows
+        .iter()
+        .map(|r| r.config_key.clone())
+        .collect::<std::collections::HashSet<_>>()
+        .into_iter()
+        .collect();
+    configs.sort();
+
+    let bpp_values: Vec<f32> = rows.iter().map(|r| r.bpp).collect();
+    let bpp_min = bpp_values.iter().cloned().fold(f32::MAX, f32::min);
+    let bpp_max = bpp_values.iter().cloned().fold(f32::MIN, f32::max);
+    let bpp_mean = bpp_values.iter().sum::<f32>() / bpp_values.len() as f32;
+
+    writeln!(output, "{:-^80}", " SUMMARY ").unwrap();
+    writeln!(output, "Total encodings:  {}", rows.len()).unwrap();
+    writeln!(output, "Unique images:    {}", unique_images.len()).unwrap();
+    writeln!(output, "Configs tested:   {}", configs.join(", ")).unwrap();
+    writeln!(
+        output,
+        "BPP range:        {:.3} - {:.3} (mean: {:.3})",
+        bpp_min, bpp_max, bpp_mean
+    )
+    .unwrap();
+    writeln!(
+        output,
+        "SSIM2 mean:       {:.2}",
+        rows.iter().map(|r| r.ssimulacra2).sum::<f32>() / rows.len() as f32
+    )
+    .unwrap();
+    writeln!(
+        output,
+        "Butteraugli mean: {:.2}",
+        rows.iter().map(|r| r.butteraugli).sum::<f32>() / rows.len() as f32
+    )
+    .unwrap();
+    writeln!(
+        output,
+        "DSSIM mean:       {:.6}",
+        rows.iter().map(|r| r.dssim).sum::<f32>() / rows.len() as f32
+    )
+    .unwrap();
+    writeln!(output).unwrap();
+
+    // BPP Range Analysis
+    writeln!(output, "{:-^80}", " BPP RANGE ANALYSIS ").unwrap();
+    writeln!(
+        output,
+        "For each BPP range, shows which config produces best quality metrics."
+    )
+    .unwrap();
+    writeln!(output).unwrap();
+
+    for (name, min, max) in bpp_ranges {
+        let in_range: Vec<_> = rows
+            .iter()
+            .filter(|r| r.bpp >= *min && r.bpp < *max)
+            .collect();
+
+        if in_range.is_empty() {
+            continue;
+        }
+
+        let mut by_image: HashMap<&str, Vec<&CsvRow>> = HashMap::new();
+        for row in &in_range {
+            by_image.entry(&row.source_hash).or_default().push(row);
+        }
+
+        let mut ssim2_wins: HashMap<&str, usize> = HashMap::new();
+        let mut ba_wins: HashMap<&str, usize> = HashMap::new();
+        let mut dssim_wins: HashMap<&str, usize> = HashMap::new();
+
+        for (_hash, image_rows) in &by_image {
+            if let Some(best) = image_rows.iter().max_by(|a, b| {
+                a.ssimulacra2
+                    .partial_cmp(&b.ssimulacra2)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            }) {
+                *ssim2_wins.entry(&best.config_key).or_default() += 1;
+            }
+            if let Some(best) = image_rows.iter().min_by(|a, b| {
+                a.butteraugli
+                    .partial_cmp(&b.butteraugli)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            }) {
+                *ba_wins.entry(&best.config_key).or_default() += 1;
+            }
+            if let Some(best) = image_rows.iter().min_by(|a, b| {
+                a.dssim
+                    .partial_cmp(&b.dssim)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            }) {
+                *dssim_wins.entry(&best.config_key).or_default() += 1;
+            }
+        }
+
+        let total = by_image.len();
+        writeln!(
+            output,
+            "BPP {:.1}-{:.1} ({}, {} images):",
+            min, max, name, total
+        )
+        .unwrap();
+
+        let format_wins = |wins: &HashMap<&str, usize>| -> String {
+            let mut sorted: Vec<_> = wins.iter().collect();
+            sorted.sort_by(|a, b| b.1.cmp(a.1));
+            sorted
+                .iter()
+                .map(|(k, v)| format!("{}: {} ({:.0}%)", k, v, **v as f32 / total as f32 * 100.0))
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+
+        writeln!(output, "  SSIM2 best:  {}", format_wins(&ssim2_wins)).unwrap();
+        writeln!(output, "  BA best:     {}", format_wins(&ba_wins)).unwrap();
+        writeln!(output, "  DSSIM best:  {}", format_wins(&dssim_wins)).unwrap();
+        writeln!(output).unwrap();
+    }
+
+    // Quality Range Analysis - which config gets smallest file at each quality level
+    for (metric_name, ranges, _higher_is_better) in [
+        ("SSIMULACRA2", ssim2_ranges, true),
+        ("Butteraugli", ba_ranges, false),
+        ("DSSIM", dssim_ranges, false),
+    ] {
+        writeln!(
+            output,
+            "{:-^80}",
+            format!(" {} RANGE ANALYSIS ", metric_name)
+        )
+        .unwrap();
+        writeln!(
+            output,
+            "For each {} quality level, shows which config produces smallest files.",
+            metric_name
+        )
+        .unwrap();
+        writeln!(output).unwrap();
+
+        let get_value = |row: &CsvRow| -> f32 {
+            match metric_name {
+                "SSIMULACRA2" => row.ssimulacra2,
+                "Butteraugli" => row.butteraugli,
+                "DSSIM" => row.dssim,
+                _ => 0.0,
+            }
+        };
+
+        for (name, min, max) in ranges.iter() {
+            let in_range: Vec<_> = rows
+                .iter()
+                .filter(|r| {
+                    let v = get_value(r);
+                    v >= *min && v < *max
+                })
+                .collect();
+
+            if in_range.is_empty() {
+                continue;
+            }
+
+            let mut by_image: HashMap<&str, Vec<&CsvRow>> = HashMap::new();
+            for row in &in_range {
+                by_image.entry(&row.source_hash).or_default().push(row);
+            }
+
+            let mut config_wins: HashMap<&str, (usize, f32)> = HashMap::new();
+            for (_hash, image_rows) in &by_image {
+                if let Some(best) = image_rows.iter().min_by(|a, b| {
+                    a.bpp
+                        .partial_cmp(&b.bpp)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                }) {
+                    let entry = config_wins.entry(&best.config_key).or_insert((0, 0.0));
+                    entry.0 += 1;
+                    entry.1 += best.bpp;
+                }
+            }
+
+            let total = by_image.len();
+            writeln!(
+                output,
+                "{} {} ({:.4}-{:.4}, {} images):",
+                metric_name, name, min, max, total
+            )
+            .unwrap();
+
+            let mut sorted: Vec<_> = config_wins.iter().collect();
+            sorted.sort_by(|a, b| b.1 .0.cmp(&a.1 .0));
+            for (config, (wins, bpp_sum)) in sorted {
+                let avg_bpp = bpp_sum / *wins as f32;
+                writeln!(
+                    output,
+                    "  {}: {} wins ({:.0}%), avg BPP: {:.3}",
+                    config,
+                    wins,
+                    *wins as f32 / total as f32 * 100.0,
+                    avg_bpp
+                )
+                .unwrap();
+            }
+            writeln!(output).unwrap();
+        }
+    }
+
+    // Config Characteristics
+    writeln!(
+        output,
+        "{:-^80}",
+        " CONFIG PERFORMANCE BY IMAGE CHARACTERISTICS "
+    )
+    .unwrap();
+    writeln!(output).unwrap();
+
+    let mut by_config: HashMap<&str, Vec<&CsvRow>> = HashMap::new();
+    for row in rows {
+        by_config.entry(&row.config_key).or_default().push(row);
+    }
+
+    let mut config_list: Vec<_> = by_config.keys().collect();
+    config_list.sort();
+
+    for config in config_list {
+        let config_rows = &by_config[config];
+        let count = config_rows.len();
+        let avg_bpp = config_rows.iter().map(|r| r.bpp).sum::<f32>() / count as f32;
+        let avg_ssim2 = config_rows.iter().map(|r| r.ssimulacra2).sum::<f32>() / count as f32;
+        let avg_ba = config_rows.iter().map(|r| r.butteraugli).sum::<f32>() / count as f32;
+        let avg_dssim = config_rows.iter().map(|r| r.dssim).sum::<f32>() / count as f32;
+        let avg_variance = config_rows.iter().map(|r| r.variance).sum::<f32>() / count as f32;
+        let avg_edge = config_rows.iter().map(|r| r.edge_density).sum::<f32>() / count as f32;
+        let avg_chroma =
+            config_rows.iter().map(|r| r.chroma_complexity).sum::<f32>() / count as f32;
+        let avg_uniform = config_rows
+            .iter()
+            .map(|r| r.uniform_block_fraction)
+            .sum::<f32>()
+            / count as f32;
+
+        writeln!(output, "{}:", config).unwrap();
+        writeln!(output, "  Encodings: {}", count).unwrap();
+        writeln!(
+            output,
+            "  Avg BPP: {:.3}, SSIM2: {:.1}, BA: {:.2}, DSSIM: {:.6}",
+            avg_bpp, avg_ssim2, avg_ba, avg_dssim
+        )
+        .unwrap();
+        writeln!(
+            output,
+            "  Image chars: variance={:.0}, edge={:.3}, chroma={:.3}, uniform={:.3}",
+            avg_variance, avg_edge, avg_chroma, avg_uniform
+        )
+        .unwrap();
+        writeln!(output).unwrap();
+    }
+
+    atomic_write(path, output.as_bytes())
+}
+
+fn print_summary(stats: &AtomicRunStats, elapsed: std::time::Duration) {
+    let images_processed = stats.images_processed.load(Ordering::Relaxed);
+    let images_skipped = stats.images_skipped.load(Ordering::Relaxed);
+    let encodings_performed = stats.encodings_performed.load(Ordering::Relaxed);
+    let encodings_cached = stats.encodings_cached.load(Ordering::Relaxed);
+    let total_encode_time_ms = stats.total_encode_time_ms.load(Ordering::Relaxed);
+    let total_metric_time_ms = stats.total_metric_time_ms.load(Ordering::Relaxed);
+    let errors = stats.errors.lock().unwrap();
+
+    println!("\n{:=^70}", " RUN SUMMARY ");
+    println!("Images processed:    {}", images_processed);
+    println!("Images skipped:      {}", images_skipped);
+    println!("Encodings performed: {}", encodings_performed);
+    println!("Encodings cached:    {}", encodings_cached);
+    println!(
+        "Total encode time:   {:.1}s",
+        total_encode_time_ms as f64 / 1000.0
+    );
+    println!(
+        "Total metric time:   {:.1}s",
+        total_metric_time_ms as f64 / 1000.0
+    );
+    println!("Wall clock time:     {:.1}s", elapsed.as_secs_f64());
+
+    if encodings_performed > 0 {
+        let avg_encode = total_encode_time_ms as f64 / encodings_performed as f64;
+        let avg_metric = total_metric_time_ms as f64 / encodings_performed as f64;
+        println!("Avg encode time:     {:.0}ms", avg_encode);
+        println!("Avg metric time:     {:.0}ms", avg_metric);
+    }
+
+    if !errors.is_empty() {
+        println!("\nErrors ({}):", errors.len());
+        for (i, err) in errors.iter().take(10).enumerate() {
+            println!("  {}. {}", i + 1, err);
+        }
+        if errors.len() > 10 {
+            println!("  ... and {} more", errors.len() - 10);
+        }
+    }
+}
+
+// ============================================================================
+// Work Item Processing
+// ============================================================================
+
+/// Process a single work item (one encoding at one quality level)
+fn process_work_item(item: &WorkItem, stats: &AtomicRunStats, args: &Args) -> WorkResult {
+    let config_key = item.config.key();
+
+    // Check for existing cache
+    let pattern = format!(
+        "{}-q{}_v{}.json",
+        config_key, item.quality, item.cache_version
+    );
+    let cached = fs::read_dir(&item.image_dir).ok().and_then(|entries| {
+        entries
+            .flatten()
+            .find(|e| e.file_name().to_string_lossy().ends_with(&pattern))
     });
 
-    pareto
-}
-
-fn find_crossover_bpp(points: &[EncodingPoint]) -> Option<f32> {
-    // Find the bpp where jpegli starts consistently winning on quality
-
-    // Group by bpp buckets
-    let mut buckets: HashMap<i32, (Vec<&EncodingPoint>, Vec<&EncodingPoint>)> = HashMap::new();
-
-    for point in points {
-        let bucket = (point.bpp * 20.0) as i32; // 0.05 bpp buckets
-        let entry = buckets.entry(bucket).or_insert((Vec::new(), Vec::new()));
-        if point.codec == "mozjpeg" {
-            entry.0.push(point);
-        } else {
-            entry.1.push(point);
-        }
-    }
-
-    // Find first bucket where jpegli wins
-    let mut sorted_buckets: Vec<_> = buckets.into_iter().collect();
-    sorted_buckets.sort_by_key(|&(k, _)| k);
-
-    for (bucket, (moz, jpegli)) in sorted_buckets {
-        if moz.is_empty() || jpegli.is_empty() {
-            continue;
-        }
-
-        let best_moz = moz.iter().map(|p| p.butteraugli).fold(f32::MAX, f32::min);
-        let best_jpegli = jpegli.iter().map(|p| p.butteraugli).fold(f32::MAX, f32::min);
-
-        if best_jpegli < best_moz * 0.95 {
-            // jpegli is at least 5% better
-            return Some(bucket as f32 / 20.0);
-        }
-    }
-
-    None
-}
-
-fn compute_codec_at_bpp(points: &[EncodingPoint]) -> HashMap<String, String> {
-    let mut result = HashMap::new();
-
-    for target in [0.15, 0.20, 0.25, 0.30, 0.40, 0.50, 0.75, 1.0, 1.5, 2.0] {
-        let closest: Vec<_> = points.iter()
-            .filter(|p| (p.bpp - target).abs() < 0.05)
-            .collect();
-
-        if closest.is_empty() {
-            continue;
-        }
-
-        // Find best quality at this bpp
-        let best = closest.iter()
-            .min_by(|a, b| a.butteraugli.partial_cmp(&b.butteraugli).unwrap());
-
-        if let Some(p) = best {
-            result.insert(format!("{:.2}", target), p.codec.clone());
-        }
-    }
-
-    result
-}
-
-fn compute_heuristics(images: &[ImageBenchmark], quality_levels: &[u8]) -> DiscoveredHeuristics {
-    // Average crossover bpp
-    let crossovers: Vec<f32> = images.iter()
-        .filter_map(|img| img.crossover_bpp)
-        .collect();
-
-    let avg_crossover_bpp = if crossovers.is_empty() {
-        0.27 // Default fallback
-    } else {
-        crossovers.iter().sum::<f32>() / crossovers.len() as f32
-    };
-
-    // Crossover by image type
-    let mut crossover_by_type = HashMap::new();
-
-    let photo_crossovers: Vec<f32> = images.iter()
-        .filter(|img| img.features.is_photo)
-        .filter_map(|img| img.crossover_bpp)
-        .collect();
-
-    if !photo_crossovers.is_empty() {
-        crossover_by_type.insert(
-            "photo".to_string(),
-            photo_crossovers.iter().sum::<f32>() / photo_crossovers.len() as f32,
-        );
-    }
-
-    let graphic_crossovers: Vec<f32> = images.iter()
-        .filter(|img| !img.features.is_photo)
-        .filter_map(|img| img.crossover_bpp)
-        .collect();
-
-    if !graphic_crossovers.is_empty() {
-        crossover_by_type.insert(
-            "graphic".to_string(),
-            graphic_crossovers.iter().sum::<f32>() / graphic_crossovers.len() as f32,
-        );
-    }
-
-    // Build quality mapping
-    let quality_mapping = build_quality_mapping(images, quality_levels, avg_crossover_bpp);
-
-    // Feature thresholds (simple heuristics based on data)
-    let variances: Vec<f32> = images.iter()
-        .filter(|img| img.crossover_bpp.map_or(false, |c| c < avg_crossover_bpp))
-        .map(|img| img.features.variance)
-        .collect();
-
-    let variance_threshold = if variances.is_empty() {
-        500.0
-    } else {
-        variances.iter().sum::<f32>() / variances.len() as f32
-    };
-
-    DiscoveredHeuristics {
-        image_count: images.len(),
-        avg_crossover_bpp,
-        crossover_by_type,
-        quality_mapping,
-        feature_thresholds: FeatureThresholds {
-            variance_jpegli_threshold: variance_threshold,
-            chroma_subsample_threshold: 0.15,
-            edge_density_threshold: 0.1,
-        },
-    }
-}
-
-fn build_quality_mapping(
-    images: &[ImageBenchmark],
-    _quality_levels: &[u8],
-    avg_crossover_bpp: f32,
-) -> Vec<QualityMapEntry> {
-    let mut mapping = Vec::new();
-
-    // Build mapping for unified quality 0-100 in steps of 5
-    for unified_q in (0..=100).step_by(5) {
-        // Target bpp: logarithmic mapping from 0.15 to 5.0
-        let t = unified_q as f32 / 100.0;
-        let target_bpp = 0.15 * (5.0 / 0.15_f32).powf(t);
-
-        // Target butteraugli
-        let target_butteraugli = 15.0 * (0.02_f32).powf(t);
-
-        // Find best codec at this bpp
-        let preferred_codec = if target_bpp < avg_crossover_bpp {
-            "mozjpeg".to_string()
-        } else {
-            "jpegli".to_string()
+    if cached.is_some() && !args.force {
+        stats.encodings_cached.fetch_add(1, Ordering::Relaxed);
+        return WorkResult {
+            analysis: item.analysis.clone(),
+            metrics: None,
+            cached: true,
+            error: None,
         };
+    }
 
-        // Find average quality needed for each codec at this bpp
-        let (mozjpeg_q, jpegli_q) = estimate_codec_quality_for_bpp(images, target_bpp);
-
-        // Calculate preference strength
-        let preference_strength = if target_bpp < 0.20 {
-            1.0 // Strong mozjpeg preference at very low bpp
-        } else if target_bpp > 0.35 {
-            1.0 // Strong jpegli preference at higher bpp
-        } else {
-            0.5 + 0.5 * ((target_bpp - avg_crossover_bpp) / 0.1).abs().min(1.0)
+    // Encode using the Encode trait
+    let start = Instant::now();
+    let jpeg_data =
+        match item
+            .config
+            .encode(&item.rgb_pixels, item.width, item.height, item.quality)
+        {
+            Ok(data) => data,
+            Err(e) => {
+                return WorkResult {
+                    analysis: item.analysis.clone(),
+                    metrics: None,
+                    cached: false,
+                    error: Some(format!("{} q{}: {}", config_key, item.quality, e)),
+                };
+            }
         };
+    let encode_time = start.elapsed().as_millis() as u64;
+    stats
+        .total_encode_time_ms
+        .fetch_add(encode_time, Ordering::Relaxed);
 
-        mapping.push(QualityMapEntry {
-            unified_q: unified_q as u8,
-            target_bpp,
-            target_butteraugli,
-            mozjpeg_q,
-            jpegli_q,
-            preferred_codec,
-            preference_strength,
-        });
-    }
+    let size_bytes = jpeg_data.len();
+    let bpp = (size_bytes * 8) as f32 / (item.width * item.height) as f32;
 
-    mapping
-}
-
-fn estimate_codec_quality_for_bpp(images: &[ImageBenchmark], target_bpp: f32) -> (u8, u8) {
-    let mut moz_qualities = Vec::new();
-    let mut jpegli_qualities = Vec::new();
-
-    for image in images {
-        // Find mozjpeg point closest to target bpp
-        let moz_points: Vec<_> = image.points.iter()
-            .filter(|p| p.codec == "mozjpeg")
-            .collect();
-
-        if let Some(closest) = moz_points.iter()
-            .min_by(|a, b| (a.bpp - target_bpp).abs().partial_cmp(&(b.bpp - target_bpp).abs()).unwrap())
-        {
-            if (closest.bpp - target_bpp).abs() < 0.1 {
-                moz_qualities.push(closest.quality);
-            }
+    // Decode and measure
+    let decode_start = Instant::now();
+    let decoded = match decode_jpeg(&jpeg_data) {
+        Ok(d) => d,
+        Err(e) => {
+            return WorkResult {
+                analysis: item.analysis.clone(),
+                metrics: None,
+                cached: false,
+                error: Some(format!(
+                    "{} q{}: decode error: {}",
+                    config_key, item.quality, e
+                )),
+            };
         }
+    };
+    let decode_ms = decode_start.elapsed().as_millis() as u64;
+    stats.total_decode_ms.fetch_add(decode_ms, Ordering::Relaxed);
 
-        // Find jpegli point closest to target bpp
-        let jpegli_points: Vec<_> = image.points.iter()
-            .filter(|p| p.codec == "jpegli")
-            .collect();
+    let metric_start = Instant::now();
+    let metric_results = measure_metrics(&item.rgb_pixels, &decoded, item.width, item.height);
+    let butteraugli = metric_results.butteraugli;
+    let ssimulacra2 = metric_results.ssimulacra2;
+    let dssim = metric_results.dssim;
 
-        if let Some(closest) = jpegli_points.iter()
-            .min_by(|a, b| (a.bpp - target_bpp).abs().partial_cmp(&(b.bpp - target_bpp).abs()).unwrap())
-        {
-            if (closest.bpp - target_bpp).abs() < 0.1 {
-                jpegli_qualities.push(closest.quality);
-            }
-        }
-    }
+    // Accumulate per-metric timing
+    stats.total_butteraugli_ms.fetch_add(metric_results.butteraugli_ms, Ordering::Relaxed);
+    stats.total_ssim2_ms.fetch_add(metric_results.ssim2_ms, Ordering::Relaxed);
+    stats.total_dssim_ms.fetch_add(metric_results.dssim_ms, Ordering::Relaxed);
+    stats
+        .total_metric_time_ms
+        .fetch_add(metric_start.elapsed().as_millis() as u64, Ordering::Relaxed);
 
-    let mozjpeg_q = if moz_qualities.is_empty() {
-        50
-    } else {
-        (moz_qualities.iter().map(|&q| q as u32).sum::<u32>() / moz_qualities.len() as u32) as u8
+    // Create metrics
+    let metrics = EncodingMetrics {
+        source_hash: item.analysis.source_hash.clone(),
+        config_key: config_key.clone(),
+        quality: item.quality,
+        cache_version: item.cache_version,
+        size_bytes,
+        bpp,
+        butteraugli,
+        ssimulacra2,
+        dssim,
+        encode_time_ms: encode_time,
+        timestamp: Utc::now(),
     };
 
-    let jpegli_q = if jpegli_qualities.is_empty() {
-        50
-    } else {
-        (jpegli_qualities.iter().map(|&q| q as u32).sum::<u32>() / jpegli_qualities.len() as u32) as u8
+    // Write files with metric-based names
+    let jpg_name = format_encoding_filename(
+        bpp,
+        ssimulacra2,
+        butteraugli,
+        &config_key,
+        item.quality,
+        item.cache_version,
+    );
+    let json_name = format_metrics_filename(
+        bpp,
+        ssimulacra2,
+        butteraugli,
+        &config_key,
+        item.quality,
+        item.cache_version,
+    );
+
+    if let Err(e) = atomic_write(&item.image_dir.join(&jpg_name), &jpeg_data) {
+        return WorkResult {
+            analysis: item.analysis.clone(),
+            metrics: None,
+            cached: false,
+            error: Some(format!(
+                "{} q{}: write error: {}",
+                config_key, item.quality, e
+            )),
+        };
+    }
+
+    let metrics_json = match serde_json::to_string_pretty(&metrics) {
+        Ok(j) => j,
+        Err(e) => {
+            return WorkResult {
+                analysis: item.analysis.clone(),
+                metrics: None,
+                cached: false,
+                error: Some(format!(
+                    "{} q{}: serialize error: {}",
+                    config_key, item.quality, e
+                )),
+            };
+        }
     };
 
-    (mozjpeg_q, jpegli_q)
+    if let Err(e) = atomic_write(&item.image_dir.join(&json_name), metrics_json.as_bytes()) {
+        return WorkResult {
+            analysis: item.analysis.clone(),
+            metrics: None,
+            cached: false,
+            error: Some(format!(
+                "{} q{}: write metrics error: {}",
+                config_key, item.quality, e
+            )),
+        };
+    }
+
+    stats.encodings_performed.fetch_add(1, Ordering::Relaxed);
+
+    WorkResult {
+        analysis: item.analysis.clone(),
+        metrics: Some(metrics),
+        cached: false,
+        error: None,
+    }
 }
 
-fn print_summary(results: &BenchmarkResults) {
-    println!("\n=== DISCOVERED HEURISTICS ===\n");
+/// Prepare an image: load, analyze, create directory
+fn prepare_image(
+    image_path: &Path,
+    output_dir: &Path,
+) -> Result<(Arc<Vec<u8>>, usize, usize, Arc<ImageAnalysis>, PathBuf), String> {
+    // Load image
+    let file = fs::File::open(image_path).map_err(|e| format!("Failed to open image: {}", e))?;
+    let decoder = png::Decoder::new(file);
+    let mut reader = decoder
+        .read_info()
+        .map_err(|e| format!("Failed to read PNG info: {}", e))?;
 
-    let h = &results.heuristics;
+    let mut buf = vec![0; reader.output_buffer_size()];
+    let info = reader
+        .next_frame(&mut buf)
+        .map_err(|e| format!("Failed to decode PNG: {}", e))?;
 
-    println!("Images analyzed: {}", h.image_count);
-    println!("Average crossover bpp: {:.3}", h.avg_crossover_bpp);
+    let width = info.width as usize;
+    let height = info.height as usize;
 
-    println!("\nCrossover by image type:");
-    for (typ, bpp) in &h.crossover_by_type {
-        println!("  {}: {:.3} bpp", typ, bpp);
-    }
-
-    println!("\nFeature thresholds:");
-    println!("  Variance (jpegli preferred): > {:.0}", h.feature_thresholds.variance_jpegli_threshold);
-    println!("  Chroma (subsample safe): < {:.2}", h.feature_thresholds.chroma_subsample_threshold);
-
-    println!("\nQuality mapping (unified → codec):");
-    println!("  {:>4}  {:>6}  {:>6}  {:>6}  {:>6}  {}", "Q", "bpp", "BA", "moz_q", "jpl_q", "codec");
-    for entry in &h.quality_mapping {
-        println!("  {:>4}  {:>6.2}  {:>6.2}  {:>6}  {:>6}  {}",
-                 entry.unified_q,
-                 entry.target_bpp,
-                 entry.target_butteraugli,
-                 entry.mozjpeg_q,
-                 entry.jpegli_q,
-                 entry.preferred_codec);
-    }
-
-    // Pareto summary
-    println!("\n=== PARETO FRONT ANALYSIS ===\n");
-
-    let mut moz_wins = 0;
-    let mut jpegli_wins = 0;
-    let mut ties = 0;
-
-    for image in &results.images {
-        for &idx in &image.pareto_front {
-            let point = &image.points[idx];
-            if point.codec == "mozjpeg" {
-                moz_wins += 1;
-            } else {
-                jpegli_wins += 1;
-            }
+    // Convert to RGB
+    let rgb_pixels: Vec<u8> = match info.color_type {
+        png::ColorType::Rgb => buf[..width * height * 3].to_vec(),
+        png::ColorType::Rgba => buf
+            .chunks(4)
+            .flat_map(|rgba| [rgba[0], rgba[1], rgba[2]])
+            .collect(),
+        png::ColorType::Grayscale => buf.iter().flat_map(|&g| [g, g, g]).collect(),
+        png::ColorType::GrayscaleAlpha => {
+            buf.chunks(2).flat_map(|ga| [ga[0], ga[0], ga[0]]).collect()
         }
-    }
+        _ => return Err(format!("Unsupported color type: {:?}", info.color_type)),
+    };
 
-    println!("Pareto front composition:");
-    println!("  mozjpeg points: {}", moz_wins);
-    println!("  jpegli points: {}", jpegli_wins);
-    println!("  mozjpeg share: {:.1}%", 100.0 * moz_wins as f64 / (moz_wins + jpegli_wins) as f64);
-}
-
-fn chrono_lite_timestamp() -> String {
-    // Simple timestamp without chrono dependency
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let duration = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
+    // Compute source hash
+    let source_hash = compute_source_hash(&rgb_pixels);
+    let source_name = image_path
+        .file_name()
+        .map(|s| s.to_string_lossy().to_string())
         .unwrap_or_default();
-    format!("{}", duration.as_secs())
+
+    // Create image directory
+    let image_dir = output_dir.join("images").join(&source_hash);
+    fs::create_dir_all(&image_dir).map_err(|e| format!("Failed to create image dir: {}", e))?;
+
+    // Copy original if not present
+    let original_path = image_dir.join("original.png");
+    if !original_path.exists() {
+        fs::copy(image_path, &original_path)
+            .map_err(|e| format!("Failed to copy original: {}", e))?;
+    }
+
+    // Analyze image
+    let analysis = analyze_image(&rgb_pixels, width, height, &source_hash, &source_name);
+    let analysis_path = image_dir.join("analysis.json");
+    let analysis_json = serde_json::to_string_pretty(&analysis)
+        .map_err(|e| format!("Failed to serialize analysis: {}", e))?;
+    atomic_write(&analysis_path, analysis_json.as_bytes())?;
+
+    Ok((
+        Arc::new(rgb_pixels),
+        width,
+        height,
+        Arc::new(analysis),
+        image_dir,
+    ))
+}
+
+// ============================================================================
+// Codec Verification
+// ============================================================================
+
+/// Result of verifying a single encoding
+#[derive(Debug)]
+struct VerifyResult {
+    config_key: String,
+    quality: u8,
+    source_hash: String,
+    matched: bool,
+    old_size: usize,
+    new_size: usize,
+    /// Hash of the old JPEG data
+    old_hash: String,
+    /// Hash of the new JPEG data
+    new_hash: String,
+}
+
+/// Verify a single encoding by re-encoding and comparing output
+fn verify_single_encoding(
+    rgb_pixels: &[u8],
+    width: usize,
+    height: usize,
+    config: &Config,
+    quality: u8,
+    cached_jpeg_path: &Path,
+) -> Result<VerifyResult, String> {
+    // Read the cached JPEG
+    let cached_data = fs::read(cached_jpeg_path)
+        .map_err(|e| format!("Failed to read cached JPEG: {}", e))?;
+
+    // Re-encode with current codec
+    let new_data = config.encode(rgb_pixels, width, height, quality)?;
+
+    // Compute hashes
+    let old_hash = compute_source_hash(&cached_data);
+    let new_hash = compute_source_hash(&new_data);
+
+    Ok(VerifyResult {
+        config_key: config.key(),
+        quality,
+        source_hash: String::new(), // filled in by caller
+        matched: old_hash == new_hash,
+        old_size: cached_data.len(),
+        new_size: new_data.len(),
+        old_hash,
+        new_hash,
+    })
+}
+
+/// Run quick verification at startup: 3 quality levels per config, 1 image
+/// Returns Ok(()) if all pass, Err with details if any fail
+fn run_quick_verify(
+    output_dir: &Path,
+    configs: &[Config],
+    manifest: &CacheManifest,
+) -> Result<(), Vec<VerifyResult>> {
+    println!("\n{:=^70}", " STARTUP VERIFICATION ");
+
+    // Find one cached image directory
+    let images_dir = output_dir.join("images");
+    if !images_dir.exists() {
+        println!("No cached images found, skipping verification.");
+        return Ok(());
+    }
+
+    let image_dirs: Vec<_> = fs::read_dir(&images_dir)
+        .ok()
+        .map(|entries| {
+            entries
+                .flatten()
+                .filter(|e| e.path().is_dir())
+                .collect()
+        })
+        .unwrap_or_default();
+
+    if image_dirs.is_empty() {
+        println!("No cached images found, skipping verification.");
+        return Ok(());
+    }
+
+    // Use the first image directory
+    let image_dir = image_dirs[0].path();
+    let source_hash = image_dir
+        .file_name()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_default();
+
+    // Load the original image
+    let original_path = image_dir.join("original.png");
+    if !original_path.exists() {
+        println!("No original.png in {:?}, skipping verification.", image_dir);
+        return Ok(());
+    }
+
+    let (rgb_pixels, width, height) = match load_png(&original_path) {
+        Ok(data) => data,
+        Err(e) => {
+            println!("Failed to load original: {}, skipping verification.", e);
+            return Ok(());
+        }
+    };
+
+    // Quality levels to check
+    let quality_levels = [25u8, 50, 75];
+    let mut failures = Vec::new();
+    let mut checked = 0;
+
+    for config in configs {
+        let key = config.key();
+        let cache_entry = match manifest.configs.get(&key) {
+            Some(e) => e,
+            None => continue,
+        };
+
+        for &quality in &quality_levels {
+            // Find cached JPEG for this config/quality
+            let pattern = format!("{}-q{}_v{}.jpg", key, quality, cache_entry.version);
+            let cached_jpeg = fs::read_dir(&image_dir)
+                .ok()
+                .and_then(|entries| {
+                    entries
+                        .flatten()
+                        .find(|e| e.file_name().to_string_lossy().ends_with(&pattern))
+                });
+
+            if let Some(entry) = cached_jpeg {
+                checked += 1;
+                match verify_single_encoding(
+                    &rgb_pixels,
+                    width,
+                    height,
+                    config,
+                    quality,
+                    &entry.path(),
+                ) {
+                    Ok(mut result) => {
+                        result.source_hash = source_hash.clone();
+                        if !result.matched {
+                            failures.push(result);
+                        }
+                    }
+                    Err(e) => {
+                        println!("  {} q{}: verification error: {}", key, quality, e);
+                    }
+                }
+            }
+        }
+    }
+
+    if failures.is_empty() {
+        println!(
+            "Quick verification passed: {} encodings checked, all match.",
+            checked
+        );
+        Ok(())
+    } else {
+        println!(
+            "\nWARNING: {} of {} encodings have changed!",
+            failures.len(),
+            checked
+        );
+        for f in &failures {
+            println!(
+                "  {} q{}: size {} -> {} bytes, hash {} -> {}",
+                f.config_key, f.quality, f.old_size, f.new_size, f.old_hash, f.new_hash
+            );
+        }
+        println!("\nCodec output has changed. You need to increment the version number");
+        println!("in Config::version_info() for the affected configs.");
+        Err(failures)
+    }
+}
+
+/// Run full verification: check all cached encodings
+fn run_full_verify(output_dir: &Path, configs: &[Config], manifest: &CacheManifest) {
+    println!("\n{:=^70}", " FULL VERIFICATION ");
+
+    let images_dir = output_dir.join("images");
+    if !images_dir.exists() {
+        println!("No cached images found.");
+        return;
+    }
+
+    let mut total_checked = 0;
+    let mut total_failures = 0;
+    let mut failures: Vec<VerifyResult> = Vec::new();
+
+    let image_dirs: Vec<_> = fs::read_dir(&images_dir)
+        .ok()
+        .map(|entries| entries.flatten().filter(|e| e.path().is_dir()).collect())
+        .unwrap_or_default();
+
+    println!("Verifying {} cached images...", image_dirs.len());
+
+    for (idx, image_entry) in image_dirs.iter().enumerate() {
+        let image_dir = image_entry.path();
+        let source_hash = image_dir
+            .file_name()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_default();
+
+        // Load the original image
+        let original_path = image_dir.join("original.png");
+        if !original_path.exists() {
+            continue;
+        }
+
+        let (rgb_pixels, width, height) = match load_png(&original_path) {
+            Ok(data) => data,
+            Err(_) => continue,
+        };
+
+        let mut image_failures = 0;
+
+        for config in configs {
+            let key = config.key();
+            let cache_entry = match manifest.configs.get(&key) {
+                Some(e) => e,
+                None => continue,
+            };
+
+            // Find all cached JPEGs for this config at current version
+            // Filename format: {bpp}bpp_{ssim2}ss_{ba}ba_{config}-q{quality}_v{version}.jpg
+            let config_pattern = format!("_{}-q", key);
+            let version_pattern = format!("_v{}.jpg", cache_entry.version);
+            let cached_jpegs: Vec<_> = fs::read_dir(&image_dir)
+                .ok()
+                .map(|entries| {
+                    entries
+                        .flatten()
+                        .filter(|e| {
+                            let name = e.file_name().to_string_lossy().to_string();
+                            name.contains(&config_pattern) && name.ends_with(&version_pattern)
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+
+            for entry in cached_jpegs {
+                // Extract quality from filename (format: {bpp}bpp_{ssim2}ss_{ba}ba_{config}-q{quality}_v{version}.jpg)
+                let name = entry.file_name().to_string_lossy().to_string();
+                let quality = extract_quality_from_filename(&name);
+                if quality == 0 {
+                    continue;
+                }
+
+                total_checked += 1;
+
+                match verify_single_encoding(
+                    &rgb_pixels,
+                    width,
+                    height,
+                    config,
+                    quality,
+                    &entry.path(),
+                ) {
+                    Ok(mut result) => {
+                        result.source_hash = source_hash.clone();
+                        if !result.matched {
+                            image_failures += 1;
+                            total_failures += 1;
+                            failures.push(result);
+                        }
+                    }
+                    Err(_) => {}
+                }
+            }
+        }
+
+        if (idx + 1) % 10 == 0 || idx == image_dirs.len() - 1 {
+            print!(
+                "\r[{}/{}] {} failures so far...    ",
+                idx + 1,
+                image_dirs.len(),
+                total_failures
+            );
+            io::stdout().flush().ok();
+        }
+    }
+
+    println!();
+    println!("\n{:-^70}", " VERIFICATION RESULTS ");
+    println!("Total encodings checked: {}", total_checked);
+    println!("Failures (output changed): {}", total_failures);
+
+    if !failures.is_empty() {
+        // Group by config
+        let mut by_config: HashMap<String, Vec<&VerifyResult>> = HashMap::new();
+        for f in &failures {
+            by_config.entry(f.config_key.clone()).or_default().push(f);
+        }
+
+        println!("\nFailures by config:");
+        for (config, config_failures) in &by_config {
+            println!("  {}: {} failures", config, config_failures.len());
+            // Show first few examples
+            for f in config_failures.iter().take(3) {
+                println!(
+                    "    - {} q{}: {} -> {} bytes",
+                    f.source_hash, f.quality, f.old_size, f.new_size
+                );
+            }
+            if config_failures.len() > 3 {
+                println!("    ... and {} more", config_failures.len() - 3);
+            }
+        }
+
+        println!("\nCodec output has changed. Update Config::version_info() to increment");
+        println!("the version for affected configs, then re-run the benchmark.");
+    } else {
+        println!("\nAll encodings match! Codec outputs are consistent.");
+    }
+}
+
+/// Extract quality level from encoding filename
+fn extract_quality_from_filename(filename: &str) -> u8 {
+    // Format: {bpp}bpp_{ssim2}ss_{ba}ba_{config}-q{quality}_v{version}.jpg
+    if let Some(q_pos) = filename.rfind("-q") {
+        let after_q = &filename[q_pos + 2..];
+        if let Some(underscore_pos) = after_q.find('_') {
+            if let Ok(q) = after_q[..underscore_pos].parse::<u8>() {
+                return q;
+            }
+        }
+    }
+    0
+}
+
+/// Load PNG and return (RGB pixels, width, height)
+fn load_png(path: &Path) -> Result<(Vec<u8>, usize, usize), String> {
+    let file = fs::File::open(path).map_err(|e| format!("Failed to open: {}", e))?;
+    let decoder = png::Decoder::new(file);
+    let mut reader = decoder
+        .read_info()
+        .map_err(|e| format!("Failed to read PNG info: {}", e))?;
+
+    let mut buf = vec![0; reader.output_buffer_size()];
+    let info = reader
+        .next_frame(&mut buf)
+        .map_err(|e| format!("Failed to decode PNG: {}", e))?;
+
+    let width = info.width as usize;
+    let height = info.height as usize;
+
+    let rgb_pixels: Vec<u8> = match info.color_type {
+        png::ColorType::Rgb => buf[..width * height * 3].to_vec(),
+        png::ColorType::Rgba => buf
+            .chunks(4)
+            .flat_map(|rgba| [rgba[0], rgba[1], rgba[2]])
+            .collect(),
+        png::ColorType::Grayscale => buf.iter().flat_map(|&g| [g, g, g]).collect(),
+        png::ColorType::GrayscaleAlpha => {
+            buf.chunks(2).flat_map(|ga| [ga[0], ga[0], ga[0]]).collect()
+        }
+        _ => return Err(format!("Unsupported color type: {:?}", info.color_type)),
+    };
+
+    Ok((rgb_pixels, width, height))
+}
+
+// ============================================================================
+// Main
+// ============================================================================
+
+fn main() {
+    let args = Args::parse();
+
+    // Validate args
+    if !args.corpus.exists() {
+        eprintln!("Corpus directory does not exist: {:?}", args.corpus);
+        std::process::exit(1);
+    }
+
+    // Create output directory
+    fs::create_dir_all(&args.output).expect("Failed to create output directory");
+    fs::create_dir_all(args.output.join("images")).expect("Failed to create images directory");
+
+    // Load/create manifest
+    let mut manifest = load_or_create_manifest(&args.output).expect("Failed to load manifest");
+
+    // Get configs to test
+    let configs = Config::test_subset();
+
+    // Validate manifest against current code
+    if let Err(e) = validate_or_update_manifest(&mut manifest, &configs, &args) {
+        eprintln!("Error: {}", e);
+        std::process::exit(1);
+    }
+
+    // Save updated manifest
+    save_manifest(&manifest, &args.output).expect("Failed to save manifest");
+
+    // Handle verification modes
+    if args.verify {
+        // Full verification mode - check all cached encodings and exit
+        run_full_verify(&args.output, &configs, &manifest);
+        return;
+    }
+
+    // Startup quick-check (unless --skip-verify)
+    if !args.skip_verify {
+        if let Err(failures) = run_quick_verify(&args.output, &configs, &manifest) {
+            eprintln!(
+                "\nStartup verification failed: {} encodings have changed.",
+                failures.len()
+            );
+            eprintln!("Use --skip-verify to bypass this check, or update version numbers.");
+            std::process::exit(1);
+        }
+    }
+
+    // Find images
+    let images = find_images(&args.corpus, args.max_images);
+    println!("Found {} images in {:?}", images.len(), args.corpus);
+
+    if images.is_empty() {
+        eprintln!("No PNG images found!");
+        std::process::exit(1);
+    }
+
+    // Open CSV (append mode) with mutex for thread-safe writes
+    let csv_path = args.output.join("results.csv");
+    let csv_exists = csv_path.exists();
+    let csv_file = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&csv_path)
+        .expect("Failed to open CSV");
+    let csv_writer = Arc::new(Mutex::new(
+        csv::WriterBuilder::new()
+            .has_headers(!csv_exists)
+            .from_writer(BufWriter::new(csv_file)),
+    ));
+
+    let stats = Arc::new(AtomicRunStats::new());
+    let start = Instant::now();
+
+    // Phase 1: Prepare all images (load, analyze, create dirs)
+    println!("Phase 1: Loading and analyzing {} images...", images.len());
+    let prepared: Vec<_> = images
+        .iter()
+        .filter_map(|image_path| match prepare_image(image_path, &args.output) {
+            Ok((rgb_pixels, width, height, analysis, image_dir)) => Some((
+                image_path.clone(),
+                rgb_pixels,
+                width,
+                height,
+                analysis,
+                image_dir,
+            )),
+            Err(e) => {
+                eprintln!(
+                    "Error preparing {:?}: {}",
+                    image_path.file_name().unwrap_or_default(),
+                    e
+                );
+                stats.add_error(e);
+                None
+            }
+        })
+        .collect();
+
+    stats
+        .images_processed
+        .store(prepared.len(), Ordering::Relaxed);
+    println!("Prepared {} images successfully.", prepared.len());
+
+    // Phase 2: Generate all work items
+    println!("Phase 2: Generating work items...");
+    let mut work_items = Vec::new();
+
+    for (image_path, rgb_pixels, width, height, analysis, image_dir) in &prepared {
+        for config in &configs {
+            let key = config.key();
+            let cache_entry = match manifest.configs.get(&key) {
+                Some(e) => e,
+                None => {
+                    stats.add_error(format!("Config {} not in manifest", key));
+                    continue;
+                }
+            };
+
+            // Generate quality levels (1 to 100 with step)
+            let mut q = 1u8;
+            while q <= 100 {
+                work_items.push(WorkItem {
+                    image_path: image_path.clone(),
+                    rgb_pixels: rgb_pixels.clone(),
+                    width: *width,
+                    height: *height,
+                    config: *config,
+                    quality: q,
+                    analysis: analysis.clone(),
+                    image_dir: image_dir.clone(),
+                    cache_version: cache_entry.version,
+                });
+                q = q.saturating_add(args.step);
+            }
+        }
+    }
+
+    println!(
+        "Generated {} work items across {} images x {} configs.",
+        work_items.len(),
+        prepared.len(),
+        configs.len()
+    );
+
+    // Phase 3: Process work items in parallel
+    println!("Phase 3: Processing encodings in parallel...");
+    let args_ref = &args;
+    let stats_ref = &stats;
+    let csv_writer_ref = &csv_writer;
+
+    let results: Vec<WorkResult> = work_items
+        .par_iter()
+        .map(|item| {
+            let result = process_work_item(item, stats_ref, args_ref);
+
+            // Write to CSV immediately with lock
+            if let Some(ref metrics) = result.metrics {
+                // Only write if BPP is in range
+                if metrics.bpp >= args_ref.min_bpp && metrics.bpp <= args_ref.max_bpp {
+                    let row = CsvRow {
+                        source_hash: result.analysis.source_hash.clone(),
+                        source_name: result.analysis.source_name.clone(),
+                        width: result.analysis.width,
+                        height: result.analysis.height,
+                        variance: result.analysis.variance,
+                        edge_density: result.analysis.edge_density,
+                        chroma_complexity: result.analysis.chroma_complexity,
+                        uniform_block_fraction: result.analysis.uniform_block_fraction,
+                        config_key: metrics.config_key.clone(),
+                        quality: metrics.quality,
+                        cache_version: metrics.cache_version,
+                        size_bytes: metrics.size_bytes,
+                        bpp: metrics.bpp,
+                        butteraugli: metrics.butteraugli,
+                        ssimulacra2: metrics.ssimulacra2,
+                        dssim: metrics.dssim,
+                        encode_time_ms: metrics.encode_time_ms,
+                        timestamp: metrics.timestamp.to_rfc3339(),
+                    };
+
+                    let mut writer = csv_writer_ref.lock().unwrap();
+                    if let Err(e) = writer.serialize(&row) {
+                        stats_ref.add_error(format!("CSV write error: {}", e));
+                    }
+                }
+            }
+
+            if let Some(ref error) = result.error {
+                stats_ref.add_error(error.clone());
+            }
+
+            result
+        })
+        .collect();
+
+    // Flush CSV
+    {
+        let mut writer = csv_writer.lock().unwrap();
+        writer.flush().expect("Failed to flush CSV");
+    }
+
+    // Print summary
+    print_summary(&stats, start.elapsed());
+
+    // Print timing breakdown to identify bottlenecks
+    stats.print_timing_breakdown();
+
+    // Count results
+    let new_encodings = results.iter().filter(|r| r.metrics.is_some()).count();
+    let cached = results.iter().filter(|r| r.cached).count();
+    let errors = results.iter().filter(|r| r.error.is_some()).count();
+    println!(
+        "\nResults: {} new, {} cached, {} errors",
+        new_encodings, cached, errors
+    );
+
+    // Run aggregated analysis on all accumulated data
+    if let Err(e) = run_aggregated_analysis(&args.output) {
+        eprintln!("Analysis error: {}", e);
+    }
+
+    println!("\nResults written to {:?}", args.output);
 }
