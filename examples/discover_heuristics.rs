@@ -810,6 +810,38 @@ fn format_metrics_filename(
     )
 }
 
+/// Staging filename for phase 1 encoding (before metrics computed).
+/// Uses simple predictable name that can be looked up without knowing metrics.
+fn format_staged_filename(config_key: &str, quality: u8, version: u32) -> String {
+    format!("{}-q{}_v{}.staged.jpg", config_key, quality, version)
+}
+
+/// Check if a final encoding exists (file with metrics in name).
+fn find_final_encoding(image_dir: &Path, config_key: &str, quality: u8, version: u32) -> Option<PathBuf> {
+    let suffix = format!("{}-q{}_v{}.jpg", config_key, quality, version);
+    fs::read_dir(image_dir).ok().and_then(|entries| {
+        entries
+            .filter_map(|e| e.ok())
+            .find(|e| {
+                let name = e.file_name();
+                let s = name.to_string_lossy();
+                s.ends_with(&suffix) && !s.contains(".staged.")
+            })
+            .map(|e| e.path())
+    })
+}
+
+/// Check if a staged encoding exists (waiting for metrics).
+fn find_staged_encoding(image_dir: &Path, config_key: &str, quality: u8, version: u32) -> Option<PathBuf> {
+    let name = format_staged_filename(config_key, quality, version);
+    let path = image_dir.join(&name);
+    if path.exists() {
+        Some(path)
+    } else {
+        None
+    }
+}
+
 // ============================================================================
 // Image Analysis
 // ============================================================================
@@ -1978,6 +2010,312 @@ fn process_work_item_with_processor(
         error: None,
         cached: false,
     }
+}
+
+// ============================================================================
+// Two-Phase Processing (GPU Mode)
+// ============================================================================
+//
+// For GPU mode, we separate encoding from metrics to maximize CPU utilization:
+// - Phase 1: Parallel encoding across all CPU cores (CPU-bound)
+// - Phase 2: Sequential GPU metrics (GPU context is thread-local)
+//
+// This avoids having 86% CPU idle while waiting for sequential GPU operations.
+
+/// Result from phase 1 encoding.
+enum EncodePhaseResult {
+    /// Final encoding already exists with metrics
+    AlreadyComplete,
+    /// Staged file exists, needs metrics
+    Staged(PathBuf),
+    /// Encoding failed
+    Failed(String),
+}
+
+/// Phase 1: Encode a work item and save to staged file.
+/// This is safe to call in parallel - no GPU operations.
+fn encode_work_item_phase1(
+    item: &WorkItem,
+    stats: &AtomicRunStats,
+    force: bool,
+) -> EncodePhaseResult {
+    let config_key = item.config.key();
+
+    // Check if final encoding already exists
+    if !force {
+        if find_final_encoding(&item.image_dir, &config_key, item.quality, item.cache_version).is_some() {
+            stats.encodings_cached.fetch_add(1, Ordering::Relaxed);
+            return EncodePhaseResult::AlreadyComplete;
+        }
+    }
+
+    // Check if staged file already exists
+    let staged_path = item.image_dir.join(format_staged_filename(&config_key, item.quality, item.cache_version));
+    if staged_path.exists() && !force {
+        return EncodePhaseResult::Staged(staged_path);
+    }
+
+    // Encode
+    let encode_start = Instant::now();
+    let encode_result = match item.config {
+        Config::MozJpeg { subsampling } | Config::MozJpegMax { subsampling } => {
+            encode_mozjpeg(
+                &item.rgb_pixels,
+                item.width,
+                item.height,
+                item.quality,
+                subsampling,
+                matches!(item.config, Config::MozJpegMax { .. }),
+            )
+        }
+        Config::CMozJpeg { subsampling } | Config::CMozJpegMax { subsampling } => encode_cmozjpeg(
+            &item.rgb_pixels,
+            item.width,
+            item.height,
+            item.quality,
+            subsampling,
+            matches!(item.config, Config::CMozJpegMax { .. }),
+        ),
+        Config::Jpegli { subsampling } | Config::JpegliXyb { subsampling } => encode_jpegli(
+            &item.rgb_pixels,
+            item.width,
+            item.height,
+            item.quality,
+            subsampling,
+            matches!(item.config, Config::JpegliXyb { .. }),
+        ),
+        Config::Zenjpeg { .. } => {
+            return EncodePhaseResult::Failed("Zenjpeg not implemented".to_string());
+        }
+    };
+
+    let jpeg_data = match encode_result {
+        Ok(data) => data,
+        Err(e) => {
+            stats
+                .errors
+                .lock()
+                .unwrap()
+                .push(format!("{:?} q{}: {}", item.config, item.quality, e));
+            return EncodePhaseResult::Failed(e);
+        }
+    };
+
+    let encode_ms = encode_start.elapsed().as_millis() as u64;
+    stats.total_encode_time_ms.fetch_add(encode_ms, Ordering::Relaxed);
+
+    // Write staged file
+    if let Err(e) = atomic_write(&staged_path, &jpeg_data) {
+        return EncodePhaseResult::Failed(format!("write error: {}", e));
+    }
+
+    EncodePhaseResult::Staged(staged_path)
+}
+
+/// Phase 2: Process staged items with GPU metrics.
+/// Must be called sequentially (GPU context is thread-local).
+fn process_staged_items_phase2(
+    items: &[(&WorkItem, PathBuf)], // (work_item, staged_path)
+    processor: &ImageProcessor,
+    stats: &AtomicRunStats,
+) -> Vec<WorkResult> {
+    items.iter().map(|(item, staged_path)| {
+        let config_key = item.config.key();
+
+        // Read and decode the staged JPEG
+        let jpeg_data = match fs::read(staged_path) {
+            Ok(data) => data,
+            Err(e) => {
+                return WorkResult {
+                    analysis: Arc::clone(&item.analysis),
+                    metrics: None,
+                    cached: false,
+                    error: Some(format!("{} q{}: read staged error: {}", config_key, item.quality, e)),
+                };
+            }
+        };
+
+        let decode_start = Instant::now();
+        let decoded = match decode_jpeg(&jpeg_data) {
+            Ok(d) => d,
+            Err(e) => {
+                return WorkResult {
+                    analysis: Arc::clone(&item.analysis),
+                    metrics: None,
+                    cached: false,
+                    error: Some(format!("{} q{}: decode error: {}", config_key, item.quality, e)),
+                };
+            }
+        };
+        let decode_ms = decode_start.elapsed().as_millis() as u64;
+        stats.total_decode_ms.fetch_add(decode_ms, Ordering::Relaxed);
+
+        // Measure metrics using GPU processor
+        let metric_results = processor.measure(&decoded);
+
+        stats.total_butteraugli_ms.fetch_add(metric_results.butteraugli_ms, Ordering::Relaxed);
+        stats.total_ssim2_ms.fetch_add(metric_results.ssim2_ms, Ordering::Relaxed);
+        stats.total_dssim_ms.fetch_add(metric_results.dssim_ms, Ordering::Relaxed);
+        stats.total_metric_time_ms.fetch_add(
+            metric_results.butteraugli_ms + metric_results.ssim2_ms + metric_results.dssim_ms,
+            Ordering::Relaxed,
+        );
+
+        let size_bytes = jpeg_data.len();
+        let bpp = (size_bytes as f32 * 8.0) / (processor.width * processor.height) as f32;
+        let butteraugli = metric_results.butteraugli;
+        let ssimulacra2 = metric_results.ssimulacra2;
+        let dssim = metric_results.dssim;
+
+        // Create metrics struct
+        let metrics = EncodingMetrics {
+            source_hash: item.analysis.source_hash.clone(),
+            config_key: config_key.to_string(),
+            quality: item.quality,
+            cache_version: item.cache_version,
+            size_bytes,
+            bpp,
+            butteraugli,
+            ssimulacra2,
+            dssim,
+            encode_time_ms: 0, // Already counted in phase 1
+            timestamp: Utc::now(),
+        };
+
+        // Write final files with metric-based names
+        let jpg_name = format_encoding_filename(
+            bpp,
+            ssimulacra2,
+            butteraugli,
+            &config_key,
+            item.quality,
+            item.cache_version,
+        );
+        let json_name = format_metrics_filename(
+            bpp,
+            ssimulacra2,
+            butteraugli,
+            &config_key,
+            item.quality,
+            item.cache_version,
+        );
+
+        if let Err(e) = atomic_write(&item.image_dir.join(&jpg_name), &jpeg_data) {
+            return WorkResult {
+                analysis: Arc::clone(&item.analysis),
+                metrics: None,
+                cached: false,
+                error: Some(format!("{} q{}: final write error: {}", config_key, item.quality, e)),
+            };
+        }
+
+        let metrics_json = match serde_json::to_string_pretty(&metrics) {
+            Ok(j) => j,
+            Err(e) => {
+                return WorkResult {
+                    analysis: Arc::clone(&item.analysis),
+                    metrics: None,
+                    cached: false,
+                    error: Some(format!("{} q{}: serialize error: {}", config_key, item.quality, e)),
+                };
+            }
+        };
+
+        if let Err(e) = atomic_write(&item.image_dir.join(&json_name), metrics_json.as_bytes()) {
+            return WorkResult {
+                analysis: Arc::clone(&item.analysis),
+                metrics: None,
+                cached: false,
+                error: Some(format!("{} q{}: json write error: {}", config_key, item.quality, e)),
+            };
+        }
+
+        // Delete staged file now that we have the final version
+        let _ = fs::remove_file(staged_path);
+
+        stats.encodings_performed.fetch_add(1, Ordering::Relaxed);
+
+        WorkResult {
+            analysis: Arc::clone(&item.analysis),
+            metrics: Some(metrics),
+            error: None,
+            cached: false,
+        }
+    }).collect()
+}
+
+/// Two-phase processing for a single source image (GPU mode).
+///
+/// Phase 1: Parallel encoding of all work items
+/// Phase 2: Sequential GPU metrics computation
+fn process_image_two_phase(
+    work_items: &[WorkItem],
+    stats: &AtomicRunStats,
+    args: &Args,
+) -> Vec<WorkResult> {
+    if work_items.is_empty() {
+        return Vec::new();
+    }
+
+    // Phase 1: Parallel encoding
+    let encode_results: Vec<_> = work_items
+        .par_iter()
+        .map(|item| (item, encode_work_item_phase1(item, stats, args.force)))
+        .collect();
+
+    // Separate completed from needing-metrics
+    let mut results = Vec::with_capacity(work_items.len());
+    let mut staged_items: Vec<(&WorkItem, PathBuf)> = Vec::new();
+
+    for (item, result) in &encode_results {
+        match result {
+            EncodePhaseResult::AlreadyComplete => {
+                results.push(WorkResult {
+                    analysis: Arc::clone(&item.analysis),
+                    metrics: None,
+                    cached: true,
+                    error: None,
+                });
+            }
+            EncodePhaseResult::Staged(path) => {
+                staged_items.push((item, path.clone()));
+            }
+            EncodePhaseResult::Failed(e) => {
+                results.push(WorkResult {
+                    analysis: Arc::clone(&item.analysis),
+                    metrics: None,
+                    cached: false,
+                    error: Some(e.clone()),
+                });
+            }
+        }
+    }
+
+    // Phase 2: Sequential GPU metrics (if there are staged items)
+    if !staged_items.is_empty() {
+        let first = work_items.first().unwrap();
+        let rgb_pixels = first.rgb_pixels.as_ref().clone();
+
+        match ImageProcessor::new(rgb_pixels, first.width, first.height, args.gpu) {
+            Ok(processor) => {
+                let metric_results = process_staged_items_phase2(&staged_items, &processor, stats);
+                results.extend(metric_results);
+            }
+            Err(e) => {
+                // If processor fails, mark all staged as errors
+                for (item, _) in staged_items {
+                    results.push(WorkResult {
+                        analysis: Arc::clone(&item.analysis),
+                        metrics: None,
+                        cached: false,
+                        error: Some(format!("ImageProcessor error: {}", e)),
+                    });
+                }
+            }
+        }
+    }
+
+    results
 }
 
 /// Measure all metrics for a decoded image (non-cached version).
@@ -3618,27 +3956,22 @@ fn main() {
             .push(item);
     }
 
+    let total_items: usize = work_by_image.values().map(|v| v.len()).sum();
     println!(
-        "Processing {} images with {} work items each (avg){}",
+        "Processing {} images with {} work items total ({} avg per image){}",
         work_by_image.len(),
-        work_by_image.values().map(|v| v.len()).sum::<usize>() / work_by_image.len().max(1),
-        if args.gpu { " [GPU mode - sequential to maintain CUDA context]" } else { "" }
+        total_items,
+        total_items / work_by_image.len().max(1),
+        if args.gpu { " [GPU mode - two-phase parallel]" } else { "" }
     );
 
     let args_ref = &args;
     let stats_ref = &stats;
     let csv_writer_ref = &csv_writer;
 
-    // Helper to process one image and write results to CSV
-    let process_one_image = |image_path: &PathBuf, items: &[WorkItem]| -> Vec<WorkResult> {
-        if args_ref.verbose {
-            eprintln!("Processing {:?} ({} encodings)", image_path.file_name().unwrap_or_default(), items.len());
-        }
-
-        let image_results = process_image_lockstep(items, stats_ref, args_ref);
-
-        // Write results to CSV
-        for result in &image_results {
+    // Helper to write results to CSV
+    let write_results_to_csv = |results: &[WorkResult]| {
+        for result in results {
             if let Some(ref metrics) = result.metrics {
                 if metrics.bpp >= args_ref.min_bpp && metrics.bpp <= args_ref.max_bpp {
                     let row = CsvRow {
@@ -3673,20 +4006,134 @@ fn main() {
                 stats_ref.add_error(error.clone());
             }
         }
-
-        image_results
     };
 
-    // Process images - sequentially for GPU mode (CUDA context is thread-local),
-    // parallel for CPU mode
+    // Process images - use two-phase for GPU mode, parallel for CPU mode
     let results: Vec<WorkResult> = if args.gpu {
-        // GPU mode: sequential processing to maintain CUDA context
-        work_by_image
-            .iter()
-            .flat_map(|(image_path, items)| process_one_image(image_path, items))
-            .collect()
+        // GPU mode: Two-phase processing for maximum CPU utilization
+        // Phase 1: Parallel encoding across ALL work items
+        // Phase 2: Sequential GPU metrics per image
+
+        println!("  Phase 1: Parallel encoding across all {} work items...", total_items);
+        let phase1_start = Instant::now();
+
+        // Collect all work items for parallel encoding
+        let all_items: Vec<&WorkItem> = work_by_image
+            .values()
+            .flat_map(|items| items.iter())
+            .collect();
+
+        // Encode all items in parallel
+        let encode_results: Vec<_> = all_items
+            .par_iter()
+            .map(|item| (*item, encode_work_item_phase1(item, stats_ref, args_ref.force)))
+            .collect();
+
+        let phase1_time = phase1_start.elapsed();
+        let staged_count = encode_results.iter()
+            .filter(|(_, r)| matches!(r, EncodePhaseResult::Staged(_)))
+            .count();
+        println!("  Phase 1 complete: {} staged, {} cached in {:.1}s",
+                 staged_count,
+                 encode_results.len() - staged_count,
+                 phase1_time.as_secs_f32());
+
+        // Group encode results by image path for phase 2
+        let mut results_by_image: HashMap<PathBuf, Vec<(&WorkItem, EncodePhaseResult)>> = HashMap::new();
+        for (item, result) in encode_results {
+            results_by_image
+                .entry(item.image_path.clone())
+                .or_default()
+                .push((item, result));
+        }
+
+        println!("  Phase 2: Sequential GPU metrics for {} images...", results_by_image.len());
+        let phase2_start = Instant::now();
+
+        // Phase 2: Sequential GPU metrics per image
+        let mut all_results: Vec<WorkResult> = Vec::with_capacity(total_items);
+
+        for (idx, (image_path, item_results)) in results_by_image.iter().enumerate() {
+            if args_ref.verbose {
+                eprintln!("  Metrics [{}/{}]: {:?}",
+                         idx + 1, results_by_image.len(),
+                         image_path.file_name().unwrap_or_default());
+            }
+
+            // Separate into completed vs needing metrics
+            let mut image_results: Vec<WorkResult> = Vec::new();
+            let mut staged_items: Vec<(&WorkItem, PathBuf)> = Vec::new();
+
+            for (item, result) in item_results {
+                match result {
+                    EncodePhaseResult::AlreadyComplete => {
+                        image_results.push(WorkResult {
+                            analysis: Arc::clone(&item.analysis),
+                            metrics: None,
+                            cached: true,
+                            error: None,
+                        });
+                    }
+                    EncodePhaseResult::Staged(path) => {
+                        staged_items.push((item, path.clone()));
+                    }
+                    EncodePhaseResult::Failed(e) => {
+                        image_results.push(WorkResult {
+                            analysis: Arc::clone(&item.analysis),
+                            metrics: None,
+                            cached: false,
+                            error: Some(e.clone()),
+                        });
+                    }
+                }
+            }
+
+            // Process staged items with GPU metrics
+            if !staged_items.is_empty() {
+                let first = staged_items.first().unwrap().0;
+                let rgb_pixels = first.rgb_pixels.as_ref().clone();
+
+                match ImageProcessor::new(rgb_pixels, first.width, first.height, args_ref.gpu) {
+                    Ok(processor) => {
+                        let metric_results = process_staged_items_phase2(&staged_items, &processor, stats_ref);
+                        image_results.extend(metric_results);
+                    }
+                    Err(e) => {
+                        for (item, _) in staged_items {
+                            image_results.push(WorkResult {
+                                analysis: Arc::clone(&item.analysis),
+                                metrics: None,
+                                cached: false,
+                                error: Some(format!("ImageProcessor error: {}", e)),
+                            });
+                        }
+                    }
+                }
+            }
+
+            // Write results to CSV immediately
+            write_results_to_csv(&image_results);
+            all_results.extend(image_results);
+        }
+
+        let phase2_time = phase2_start.elapsed();
+        println!("  Phase 2 complete: {} results in {:.1}s",
+                 all_results.len(), phase2_time.as_secs_f32());
+
+        all_results
     } else {
-        // CPU mode: parallel processing across images
+        // CPU mode: parallel processing across images (original behavior)
+        let process_one_image = |image_path: &PathBuf, items: &[WorkItem]| -> Vec<WorkResult> {
+            if args_ref.verbose {
+                eprintln!("Processing {:?} ({} encodings)",
+                         image_path.file_name().unwrap_or_default(), items.len());
+            }
+
+            let image_results = process_image_lockstep(items, stats_ref, args_ref);
+            write_results_to_csv(&image_results);
+            image_results
+        };
+
         work_by_image
             .into_par_iter()
             .flat_map(|(image_path, items)| process_one_image(&image_path, &items))
