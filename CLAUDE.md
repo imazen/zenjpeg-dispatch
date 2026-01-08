@@ -54,28 +54,49 @@ zenjpeg/
 ## Current Status (Jan 2026)
 
 ### Recently Completed
+- [x] **Two-phase GPU processing** - parallel encoding across all CPU cores, sequential GPU metrics
+- [x] **GPU-accelerated Butteraugli** in discover_heuristics
 - [x] **GPU-accelerated DSSIM** in discover_heuristics (~16% faster)
 - [x] **GPU-accelerated SSIMULACRA2** in discover_heuristics (~14x faster)
 - [x] **Lockstep processing mode** with cached metric references
 - [x] **ButteraugliReference caching** for ~45% speedup
 - [x] **Ssimulacra2Reference caching** for CPU mode
-- [x] Sequential processing for GPU mode (CUDA context thread-locality)
 - [x] Proper CUDA cleanup with Drop impl and exit(0) workaround
+- [x] Version filtering for codec cache (only use current versions)
+- [x] Multi-corpus support (`--corpus` can be specified multiple times)
 
 ### Benchmarking Infrastructure
 
 **discover_heuristics.rs** - Main benchmarking tool:
 - 8 codec configurations: mozjpeg-420/444, mozjpeg-max-420/444, jpegli-420/444, cmozjpeg-420, cmozjpeg-max-420
 - 100 quality levels per config
-- 3 quality metrics: SSIMULACRA2, Butteraugli, DSSIM
-- GPU mode: `--gpu` flag accelerates both SSIM2 and DSSIM
-- Lockstep mode: processes one image through all configs before moving to next
+- 3 quality metrics: SSIMULACRA2, Butteraugli, DSSIM (all GPU-accelerated)
+- GPU mode: `--gpu` flag uses two-phase processing for max CPU utilization
+- Multi-corpus: `--corpus path1 --corpus path2` to combine corpora
 
-**GPU Performance (with --gpu flag):**
+**Two-Phase GPU Processing (--gpu flag):**
 ```
-SSIMULACRA2:    1.8s  (  1.7%)   # GPU-accelerated (~14x faster)
-DSSIM:         19.5s  ( 18.5%)   # GPU-accelerated (~16% faster)
-Butteraugli:   62.9s  ( 59.5%)   # CPU with cached reference
+Phase 1: Parallel encoding across all CPU cores
+  - 19,200 encodings in ~34s (vs ~700s sequential)
+  - All CPU cores fully utilized
+
+Phase 2: Sequential GPU metrics per image
+  - CUDA context is thread-local, requires sequential processing
+  - GPU metrics: SSIM2 + DSSIM + Butteraugli
+
+Full Kodak benchmark (24 images × 8 configs × 100 quality levels):
+  Wall clock: 675s (11 minutes)
+  Encoding:   695s CPU time (distributed across parallel workers)
+  Metrics:    172s (GPU-accelerated)
+```
+
+**GPU Performance Breakdown (Kodak, 19,200 encodings):**
+```
+Encoding:      694.9s  (74.4%)   # Parallelized across all cores
+Decoding:       67.4s  ( 7.2%)
+Butteraugli:    67.5s  ( 7.2%)   # GPU-accelerated
+SSIMULACRA2:    43.7s  ( 4.7%)   # GPU-accelerated
+DSSIM:          60.5s  ( 6.5%)   # GPU-accelerated
 ```
 
 ### Codec Selection by Metric
