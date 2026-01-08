@@ -1100,6 +1100,14 @@ use ssimulacra2_cuda::Ssimulacra2 as GpuSsimulacra2;
 #[cfg(feature = "gpu")]
 use dssim_cuda::Dssim as GpuDssim;
 
+/// GPU verification constants
+#[cfg(feature = "gpu")]
+const GPU_VERIFY_INTERVAL: usize = 50;  // Verify every N tests
+#[cfg(feature = "gpu")]
+const GPU_SSIM2_EPSILON_PCT: f64 = 0.5;  // Allow 0.5% relative error for SSIM2
+#[cfg(feature = "gpu")]
+const GPU_DSSIM_EPSILON_PCT: f64 = 0.5;  // Allow 0.5% relative error for DSSIM
+
 /// Initialize CUDA once at startup
 #[cfg(feature = "gpu")]
 fn init_cuda_once() -> bool {
@@ -1303,6 +1311,9 @@ struct ImageProcessor {
     /// GPU DSSIM context (when --gpu flag is used)
     #[cfg(feature = "gpu")]
     gpu_dssim: Option<Mutex<GpuDssimContext>>,
+    /// Counter for GPU verification (verify every N tests)
+    #[cfg(feature = "gpu")]
+    verification_counter: AtomicUsize,
 }
 
 impl ImageProcessor {
@@ -1391,6 +1402,8 @@ impl ImageProcessor {
             gpu_ssim2,
             #[cfg(feature = "gpu")]
             gpu_dssim,
+            #[cfg(feature = "gpu")]
+            verification_counter: AtomicUsize::new(0),
         })
     }
 
@@ -1414,7 +1427,7 @@ impl ImageProcessor {
 
         let decoded_slice = &decoded[..expected_size];
 
-        // Check GPU availability
+        // Check GPU availability and if verification is needed
         #[cfg(feature = "gpu")]
         let use_gpu_ssim2 = self.gpu_ssim2.is_some();
         #[cfg(not(feature = "gpu"))]
@@ -1424,6 +1437,12 @@ impl ImageProcessor {
         let use_gpu_dssim = self.gpu_dssim.is_some();
         #[cfg(not(feature = "gpu"))]
         let use_gpu_dssim = false;
+
+        #[cfg(feature = "gpu")]
+        let should_verify = {
+            let count = self.verification_counter.fetch_add(1, Ordering::Relaxed);
+            (use_gpu_ssim2 || use_gpu_dssim) && (count % GPU_VERIFY_INTERVAL == 0)
+        };
 
         // Calculate SSIM2 - either on GPU or CPU
         let (ssimulacra2, ssim_ms) = if use_gpu_ssim2 {
@@ -1466,6 +1485,12 @@ impl ImageProcessor {
             (result, start.elapsed().as_millis() as u64)
         };
 
+        // GPU verification: compare GPU results against CPU every N tests
+        #[cfg(feature = "gpu")]
+        if should_verify {
+            self.verify_gpu_accuracy(decoded_slice, ssimulacra2, dssim, use_gpu_ssim2, use_gpu_dssim);
+        }
+
         // Calculate butteraugli on CPU with cached reference
         let (butteraugli, ba_ms) = {
             let start = Instant::now();
@@ -1482,6 +1507,62 @@ impl ImageProcessor {
             butteraugli_ms: ba_ms,
             ssim2_ms: ssim_ms,
             dssim_ms,
+        }
+    }
+
+    /// Verify GPU results against CPU computation
+    #[cfg(feature = "gpu")]
+    fn verify_gpu_accuracy(&self, decoded_slice: &[u8], gpu_ssim2: f32, gpu_dssim: f32,
+                           used_gpu_ssim2: bool, used_gpu_dssim: bool) {
+        let count = self.verification_counter.load(Ordering::Relaxed);
+
+        // Verify SSIM2
+        if used_gpu_ssim2 {
+            let test_arr = rgb8_to_array(decoded_slice);
+            let test_img = Img::new(test_arr.as_slice(), self.width, self.height);
+            let cpu_ssim2 = self.ssim2_ref.compare(test_img)
+                .map(|s| s as f32)
+                .unwrap_or(0.0);
+
+            let error_pct = if cpu_ssim2.abs() > 0.0001 {
+                ((gpu_ssim2 - cpu_ssim2).abs() / cpu_ssim2.abs()) * 100.0
+            } else {
+                (gpu_ssim2 - cpu_ssim2).abs() * 100.0
+            };
+
+            if error_pct > GPU_SSIM2_EPSILON_PCT as f32 {
+                eprintln!("\n🚨🚨🚨 GPU SSIM2 DIVERGENCE DETECTED! 🚨🚨🚨");
+                eprintln!("   Test #{}: GPU={:.6} CPU={:.6} Error={:.3}% (max={:.1}%)",
+                         count, gpu_ssim2, cpu_ssim2, error_pct, GPU_SSIM2_EPSILON_PCT);
+                eprintln!("   ⚠️  Results may be unreliable! Consider using --no-gpu\n");
+            } else {
+                eprintln!("✅ GPU SSIM2 verified #{}: GPU={:.4} CPU={:.4} err={:.4}%",
+                         count, gpu_ssim2, cpu_ssim2, error_pct);
+            }
+        }
+
+        // Verify DSSIM
+        if used_gpu_dssim {
+            let test_img = rgb8_to_dssim_image(decoded_slice, self.width, self.height);
+            let cpu_dssim = calculate_dssim(&self.dssim_ref_img, &test_img, &self.viewing)
+                .map(|s| s as f32)
+                .unwrap_or(f32::MAX);
+
+            let error_pct = if cpu_dssim.abs() > 0.0001 {
+                ((gpu_dssim - cpu_dssim).abs() / cpu_dssim.abs()) * 100.0
+            } else {
+                (gpu_dssim - cpu_dssim).abs() * 100.0
+            };
+
+            if error_pct > GPU_DSSIM_EPSILON_PCT as f32 {
+                eprintln!("\n🚨🚨🚨 GPU DSSIM DIVERGENCE DETECTED! 🚨🚨🚨");
+                eprintln!("   Test #{}: GPU={:.6} CPU={:.6} Error={:.3}% (max={:.1}%)",
+                         count, gpu_dssim, cpu_dssim, error_pct, GPU_DSSIM_EPSILON_PCT);
+                eprintln!("   ⚠️  Results may be unreliable! Consider using --no-gpu\n");
+            } else {
+                eprintln!("✅ GPU DSSIM verified #{}: GPU={:.6} CPU={:.6} err={:.4}%",
+                         count, gpu_dssim, cpu_dssim, error_pct);
+            }
         }
     }
 }
