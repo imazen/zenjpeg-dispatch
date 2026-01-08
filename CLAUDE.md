@@ -54,6 +54,7 @@ zenjpeg/
 ## Current Status (Jan 2026)
 
 ### Recently Completed
+- [x] **GPU-accelerated DSSIM** in discover_heuristics (~16% faster)
 - [x] **GPU-accelerated SSIMULACRA2** in discover_heuristics (~14x faster)
 - [x] **Lockstep processing mode** with cached metric references
 - [x] **ButteraugliReference caching** for ~45% speedup
@@ -67,14 +68,14 @@ zenjpeg/
 - 8 codec configurations: mozjpeg-420/444, mozjpeg-max-420/444, jpegli-420/444, cmozjpeg-420, cmozjpeg-max-420
 - 100 quality levels per config
 - 3 quality metrics: SSIMULACRA2, Butteraugli, DSSIM
-- GPU mode: `--gpu` flag reduces SSIM2 from ~22% to ~1.6% of runtime
+- GPU mode: `--gpu` flag accelerates both SSIM2 and DSSIM
 - Lockstep mode: processes one image through all configs before moving to next
 
 **GPU Performance (with --gpu flag):**
 ```
-SSIMULACRA2:    1.7s  (  1.6%)   # GPU-accelerated
-Butteraugli:   64.7s  ( 58.7%)   # CPU with cached reference
-DSSIM:         23.2s  ( 21.0%)   # CPU
+SSIMULACRA2:    1.8s  (  1.7%)   # GPU-accelerated (~14x faster)
+DSSIM:         19.5s  ( 18.5%)   # GPU-accelerated (~16% faster)
+Butteraugli:   62.9s  ( 59.5%)   # CPU with cached reference
 ```
 
 ### Codec Selection by Metric
@@ -143,10 +144,11 @@ Encoder::fastest()         // No optimization, baseline
 ### GPU Feature Dependencies
 ```toml
 [features]
-gpu = ["ssimulacra2-cuda", "cudarse-driver", "cudarse-npp"]
+gpu = ["ssimulacra2-cuda", "dssim-cuda", "cudarse-driver", "cudarse-npp"]
 
 [dependencies]
 ssimulacra2-cuda = { path = "../turbo-metrics/crates/ssimulacra2-cuda", optional = true }
+dssim-cuda = { path = "../turbo-metrics/crates/dssim-cuda", optional = true }
 cudarse-driver = { path = "../turbo-metrics/crates/cudarse/cudarse-driver", optional = true }
 cudarse-npp = { path = "../turbo-metrics/crates/cudarse/cudarse-npp", features = ["isu", "ist"], optional = true }
 ```
@@ -183,6 +185,7 @@ cargo test -- --nocapture     # Show output
 
 ### GPU (optional)
 - `ssimulacra2-cuda` (path: ../turbo-metrics) - GPU SSIMULACRA2
+- `dssim-cuda` (path: ../turbo-metrics) - GPU DSSIM
 - `cudarse-driver` - CUDA driver bindings
 - `cudarse-npp` - NPP image processing
 

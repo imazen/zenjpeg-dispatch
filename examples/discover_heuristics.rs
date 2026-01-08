@@ -1092,11 +1092,13 @@ use cudarse_driver::CuStream;
 #[cfg(feature = "gpu")]
 use cudarse_npp::image::isu::Malloc;
 #[cfg(feature = "gpu")]
-use cudarse_npp::image::{Image as NppImage, Img as NppImg, C};
+use cudarse_npp::image::{Image as NppImage, Img as NppImg, ImgMut, C};
 #[cfg(feature = "gpu")]
 use cudarse_npp::set_stream;
 #[cfg(feature = "gpu")]
 use ssimulacra2_cuda::Ssimulacra2 as GpuSsimulacra2;
+#[cfg(feature = "gpu")]
+use dssim_cuda::Dssim as GpuDssim;
 
 /// Initialize CUDA once at startup
 #[cfg(feature = "gpu")]
@@ -1195,18 +1197,91 @@ impl Drop for GpuSsim2Context {
     }
 }
 
+/// GPU-accelerated DSSIM context
+#[cfg(feature = "gpu")]
+struct GpuDssimContext {
+    stream: CuStream,
+    tmp_ref: NppImage<u8, C<3>>,
+    tmp_dis: NppImage<u8, C<3>>,
+    dssim: GpuDssim,
+}
+
+#[cfg(feature = "gpu")]
+impl GpuDssimContext {
+    fn new(width: u32, height: u32) -> Result<Self, Box<dyn std::error::Error>> {
+        let stream = CuStream::new()?;
+        set_stream(stream.inner() as _)?;
+
+        // Allocate GPU buffers for sRGB images
+        let tmp_ref: NppImage<u8, C<3>> = NppImage::malloc(width, height)?;
+        let tmp_dis: NppImage<u8, C<3>> = tmp_ref.malloc_same_size()?;
+
+        // Create DSSIM instance (tied to these dimensions)
+        let dssim = GpuDssim::new(width, height, &stream)?;
+
+        // Sync to ensure all GPU operations complete before first compute
+        stream.sync()?;
+
+        Ok(Self {
+            stream,
+            tmp_ref,
+            tmp_dis,
+            dssim,
+        })
+    }
+
+    fn compute(&mut self, reference: &[u8], distorted: &[u8]) -> f64 {
+        // Verify buffer sizes match
+        let expected = self.tmp_ref.width() as usize * self.tmp_ref.height() as usize * 3;
+        if reference.len() != expected || distorted.len() != expected {
+            eprintln!("GPU DSSIM: size mismatch: ref={}, dis={}, expected={}",
+                reference.len(), distorted.len(), expected);
+            return 0.0;
+        }
+
+        // Upload images to GPU
+        if let Err(e) = self.tmp_ref.copy_from_cpu(reference, self.stream.inner() as _) {
+            eprintln!("GPU DSSIM: failed to upload reference: {:?}", e);
+            return 0.0;
+        }
+        if let Err(e) = self.tmp_dis.copy_from_cpu(distorted, self.stream.inner() as _) {
+            eprintln!("GPU DSSIM: failed to upload distorted: {:?}", e);
+            return 0.0;
+        }
+
+        // Compute DSSIM
+        match self.dssim.compute_sync(&self.tmp_ref, &self.tmp_dis, &self.stream) {
+            Ok(score) => score,
+            Err(e) => {
+                eprintln!("GPU DSSIM compute error: {:?}", e);
+                0.0
+            }
+        }
+    }
+
+    /// Sync and cleanup before dropping
+    fn cleanup(&self) {
+        let _ = self.stream.sync();
+        let _ = set_stream(CuStream::DEFAULT.inner() as _);
+    }
+}
+
+#[cfg(feature = "gpu")]
+impl Drop for GpuDssimContext {
+    fn drop(&mut self) {
+        self.cleanup();
+    }
+}
+
 /// Holds cached metric references for efficient repeated comparisons.
 ///
 /// When processing a single source image through multiple codecs/qualities,
 /// the reference image data only needs to be processed once. This provides
 /// ~40-50% speedup for butteraugli and significant speedup for SSIM2.
 ///
-/// When GPU mode is enabled, SSIM2 uses GPU acceleration for even faster computation.
-///
-/// DSSIM is calculated fresh each time as it's the fastest metric (~22% of time)
-/// and doesn't have a convenient reference caching API.
+/// When GPU mode is enabled, SSIM2 and DSSIM use GPU acceleration for faster computation.
 struct ImageProcessor {
-    /// Original RGB pixels (sRGB u8) - owned copy for DSSIM and GPU SSIM2
+    /// Original RGB pixels (sRGB u8) - owned copy for GPU metrics
     rgb_pixels: Vec<u8>,
     /// RGB as array for CPU SSIM2 - owned
     rgb_array: Vec<[u8; 3]>,
@@ -1217,7 +1292,7 @@ struct ImageProcessor {
     butteraugli_ref: ButteraugliReference,
     /// Cached SSIM2 reference (precomputed linear RGB) - owns its data (CPU mode)
     ssim2_ref: Ssimulacra2Reference,
-    /// Cached DSSIM reference image (ImgVec)
+    /// Cached DSSIM reference image (ImgVec) - for CPU mode
     dssim_ref_img: imgref::ImgVec<rgb::RGBA<f32>>,
     /// Viewing condition for DSSIM
     viewing: ViewingCondition,
@@ -1225,6 +1300,9 @@ struct ImageProcessor {
     /// Using Mutex for Send+Sync, required for rayon parallel iteration
     #[cfg(feature = "gpu")]
     gpu_ssim2: Option<Mutex<GpuSsim2Context>>,
+    /// GPU DSSIM context (when --gpu flag is used)
+    #[cfg(feature = "gpu")]
+    gpu_dssim: Option<Mutex<GpuDssimContext>>,
 }
 
 impl ImageProcessor {
@@ -1260,7 +1338,7 @@ impl ImageProcessor {
         let dssim_ref_img = rgb8_to_dssim_image(&rgb_pixels, width, height);
         let viewing = ViewingCondition::default();
 
-        // Initialize GPU SSIM2 context if requested
+        // Initialize GPU contexts if requested
         #[cfg(feature = "gpu")]
         let gpu_ssim2 = if use_gpu {
             eprintln!("  Creating GPU SSIM2 context for {}x{}...", width, height);
@@ -1271,6 +1349,23 @@ impl ImageProcessor {
                 }
                 Err(e) => {
                     eprintln!("Warning: Failed to create GPU SSIM2 context: {}. Falling back to CPU.", e);
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
+        #[cfg(feature = "gpu")]
+        let gpu_dssim = if use_gpu {
+            eprintln!("  Creating GPU DSSIM context for {}x{}...", width, height);
+            match GpuDssimContext::new(width as u32, height as u32) {
+                Ok(ctx) => {
+                    eprintln!("  GPU DSSIM context created successfully");
+                    Some(Mutex::new(ctx))
+                }
+                Err(e) => {
+                    eprintln!("Warning: Failed to create GPU DSSIM context: {}. Falling back to CPU.", e);
                     None
                 }
             }
@@ -1294,14 +1389,15 @@ impl ImageProcessor {
             viewing,
             #[cfg(feature = "gpu")]
             gpu_ssim2,
+            #[cfg(feature = "gpu")]
+            gpu_dssim,
         })
     }
 
     /// Measure all metrics against the cached reference.
     ///
-    /// Butteraugli and SSIM2 use cached references for ~40-50% speedup.
-    /// When GPU is enabled, SSIM2 uses GPU acceleration.
-    /// DSSIM is calculated fresh (fastest metric anyway).
+    /// Butteraugli uses cached reference for ~40-50% speedup.
+    /// When GPU is enabled, SSIM2 and DSSIM use GPU acceleration.
     fn measure(&self, decoded: &[u8]) -> MetricResults {
         let expected_size = self.width * self.height * 3;
 
@@ -1318,13 +1414,18 @@ impl ImageProcessor {
 
         let decoded_slice = &decoded[..expected_size];
 
-        // Check if GPU SSIM2 is available
+        // Check GPU availability
         #[cfg(feature = "gpu")]
         let use_gpu_ssim2 = self.gpu_ssim2.is_some();
         #[cfg(not(feature = "gpu"))]
         let use_gpu_ssim2 = false;
 
-        // Calculate SSIM2 - either on GPU (synchronous) or CPU (in parallel with others)
+        #[cfg(feature = "gpu")]
+        let use_gpu_dssim = self.gpu_dssim.is_some();
+        #[cfg(not(feature = "gpu"))]
+        let use_gpu_dssim = false;
+
+        // Calculate SSIM2 - either on GPU or CPU
         let (ssimulacra2, ssim_ms) = if use_gpu_ssim2 {
             #[cfg(feature = "gpu")]
             {
@@ -1345,31 +1446,34 @@ impl ImageProcessor {
             (result, start.elapsed().as_millis() as u64)
         };
 
-        // Calculate butteraugli and DSSIM in parallel on CPU
-        // Explicitly capture only the fields needed to avoid capturing the non-Send GPU context
-        let butteraugli_ref = &self.butteraugli_ref;
-        let dssim_ref_img = &self.dssim_ref_img;
-        let viewing = &self.viewing;
-        let width = self.width;
-        let height = self.height;
+        // Calculate DSSIM - either on GPU or CPU
+        let (dssim, dssim_ms) = if use_gpu_dssim {
+            #[cfg(feature = "gpu")]
+            {
+                let start = Instant::now();
+                let result = self.gpu_dssim.as_ref().unwrap().lock().unwrap()
+                    .compute(&self.rgb_pixels, decoded_slice) as f32;
+                (result, start.elapsed().as_millis() as u64)
+            }
+            #[cfg(not(feature = "gpu"))]
+            unreachable!()
+        } else {
+            let start = Instant::now();
+            let test_img = rgb8_to_dssim_image(decoded_slice, self.width, self.height);
+            let result = calculate_dssim(&self.dssim_ref_img, &test_img, &self.viewing)
+                .map(|s| s as f32)
+                .unwrap_or(f32::MAX);
+            (result, start.elapsed().as_millis() as u64)
+        };
 
-        let ((butteraugli, ba_ms), (dssim, dssim_ms)) = rayon::join(
-            || {
-                let start = Instant::now();
-                let result = butteraugli_ref.compare(decoded_slice)
-                    .map(|r| r.score as f32)
-                    .unwrap_or(f32::MAX);
-                (result, start.elapsed().as_millis() as u64)
-            },
-            || {
-                let start = Instant::now();
-                let test_img = rgb8_to_dssim_image(decoded_slice, width, height);
-                let result = calculate_dssim(dssim_ref_img, &test_img, viewing)
-                    .map(|s| s as f32)
-                    .unwrap_or(f32::MAX);
-                (result, start.elapsed().as_millis() as u64)
-            },
-        );
+        // Calculate butteraugli on CPU with cached reference
+        let (butteraugli, ba_ms) = {
+            let start = Instant::now();
+            let result = self.butteraugli_ref.compare(decoded_slice)
+                .map(|r| r.score as f32)
+                .unwrap_or(f32::MAX);
+            (result, start.elapsed().as_millis() as u64)
+        };
 
         MetricResults {
             butteraugli,
@@ -1377,7 +1481,7 @@ impl ImageProcessor {
             dssim,
             butteraugli_ms: ba_ms,
             ssim2_ms: ssim_ms,
-            dssim_ms: dssim_ms,
+            dssim_ms,
         }
     }
 }
