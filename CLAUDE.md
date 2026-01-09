@@ -14,13 +14,14 @@ cargo test          # Run tests
 cargo build         # Build library
 
 # Run heuristic discovery benchmark (CPU)
+# IMPORTANT: Use /mnt/v/discover/ for output, NEVER /tmp (data is hours to regenerate)
 cargo run --release --example discover_heuristics -- \
-  --corpus ~/work/codec-corpus/kodak --output /tmp/results
+  --corpus ~/work/codec-corpus/kodak --output /mnt/v/discover/kodak
 
 # Run with GPU-accelerated SSIM2 (requires CUDA)
 CUDA_PATH=/usr/local/cuda-12.6 cargo run --release --features gpu \
   --example discover_heuristics -- \
-  --corpus ~/work/codec-corpus/kodak --output /tmp/results --gpu
+  --corpus ~/work/codec-corpus/kodak --output /mnt/v/discover/kodak --gpu
 ```
 
 ## Architecture
