@@ -500,6 +500,48 @@ struct Args {
     /// Use GPU-accelerated SSIMULACRA2 (requires --features gpu and CUDA)
     #[arg(long)]
     gpu: bool,
+
+    // ========== GCP Batch Arguments ==========
+
+    /// GCP project ID for Batch execution (enables cloud mode)
+    #[arg(long)]
+    gcp_project: Option<String>,
+
+    /// GCP region for Batch jobs
+    #[arg(long, default_value = "us-central1")]
+    gcp_region: String,
+
+    /// GCS bucket for storing source images and results
+    #[arg(long)]
+    gcp_bucket: Option<String>,
+
+    /// GCP machine type for Batch workers
+    #[arg(long, default_value = "n2-standard-8")]
+    gcp_machine_type: String,
+
+    /// Container image for Batch workers (e.g., gcr.io/project/discover:latest)
+    #[arg(long)]
+    container_image: Option<String>,
+
+    /// Running inside a Batch container (used by container entrypoint)
+    #[arg(long)]
+    batch_job: bool,
+
+    /// GCS source path when running as batch job
+    #[arg(long)]
+    gcs_source: Option<String>,
+
+    /// GCS output path when running as batch job
+    #[arg(long)]
+    gcs_output: Option<String>,
+
+    /// Task index from Batch (BATCH_TASK_INDEX env var)
+    #[arg(long)]
+    task_index: Option<usize>,
+
+    /// Total number of configs (for decoding task index)
+    #[arg(long)]
+    num_configs: Option<usize>,
 }
 
 // ============================================================================
@@ -4425,12 +4467,128 @@ fn load_png(path: &Path) -> Result<(Vec<u8>, usize, usize), String> {
 }
 
 // ============================================================================
+// GCP Batch Execution
+// ============================================================================
+
+/// Run as a Batch worker - process a single (image, config) task
+fn run_batch_worker(args: &Args) {
+    // Get task index from environment or argument
+    let task_index = args.task_index.unwrap_or_else(|| {
+        std::env::var("BATCH_TASK_INDEX")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .expect("BATCH_TASK_INDEX env var or --task-index required in batch mode")
+    });
+
+    let num_configs = args.num_configs.unwrap_or_else(|| {
+        Config::test_subset().len()
+    });
+
+    let gcs_source = args.gcs_source.as_ref()
+        .expect("--gcs-source required in batch mode");
+    let gcs_output = args.gcs_output.as_ref()
+        .expect("--gcs-output required in batch mode");
+
+    // Decode task index into image/config indices
+    let image_idx = task_index / num_configs;
+    let config_idx = task_index % num_configs;
+
+    println!("Batch worker starting:");
+    println!("  Task index: {}", task_index);
+    println!("  Image index: {}", image_idx);
+    println!("  Config index: {}", config_idx);
+    println!("  GCS source: {}", gcs_source);
+    println!("  GCS output: {}", gcs_output);
+
+    // TODO: Implement GCS download/upload
+    // 1. List images from gcs_source
+    // 2. Download image[image_idx]
+    // 3. Get config[config_idx]
+    // 4. Run encoding at all quality levels
+    // 5. Upload results to gcs_output
+
+    eprintln!("GCP Batch worker mode not yet fully implemented");
+    eprintln!("This requires GCS client library (google-cloud-storage crate)");
+    std::process::exit(1);
+}
+
+/// Orchestrate a GCP Batch job submission
+fn run_gcp_batch_orchestration(args: &Args) {
+    let project = args.gcp_project.as_ref().unwrap();
+    let bucket = args.gcp_bucket.as_ref()
+        .expect("--gcp-bucket required with --gcp-project");
+    let container = args.container_image.as_ref()
+        .expect("--container-image required with --gcp-project");
+
+    println!("GCP Batch orchestration mode:");
+    println!("  Project: {}", project);
+    println!("  Region: {}", args.gcp_region);
+    println!("  Bucket: {}", bucket);
+    println!("  Machine type: {}", args.gcp_machine_type);
+    println!("  Container: {}", container);
+
+    // Collect images
+    let mut images = Vec::new();
+    for corpus_path in &args.corpus {
+        let found = find_images(corpus_path, None);
+        println!("Found {} images in {:?}", found.len(), corpus_path);
+        images.extend(found);
+    }
+    if let Some(max) = args.max_images {
+        images.truncate(max);
+    }
+
+    let configs = Config::test_subset();
+    let num_tasks = images.len() * configs.len();
+
+    println!("\nJob parameters:");
+    println!("  Images: {}", images.len());
+    println!("  Configs: {}", configs.len());
+    println!("  Total tasks: {}", num_tasks);
+
+    // TODO: Implement actual GCP Batch submission
+    // 1. Generate unique job ID
+    // 2. Upload source images to GCS
+    // 3. Submit Batch job with task array
+    // 4. Print job URL for monitoring
+
+    eprintln!("\nGCP Batch submission not yet fully implemented");
+    eprintln!("This requires:");
+    eprintln!("  1. google-cloud-storage crate for GCS uploads");
+    eprintln!("  2. GCP Batch API client (or gcloud CLI)");
+    eprintln!("\nFor now, you can manually:");
+    eprintln!("  1. Upload images: gsutil -m cp -r {} gs://{}/discover/sources/",
+              args.corpus.first().map(|p| p.display().to_string()).unwrap_or_default(), bucket);
+    eprintln!("  2. Submit batch job using gcloud batch jobs submit");
+    std::process::exit(1);
+}
+
+// ============================================================================
 // Main
 // ============================================================================
 
 fn main() {
     let args = Args::parse();
 
+    // ==================== EXECUTION MODE DETECTION ====================
+    // Three modes:
+    // 1. --batch-job: Running inside Batch container (single task worker)
+    // 2. --gcp-project: Submit new Batch job (orchestration)
+    // 3. Default: Local processing
+
+    if args.batch_job {
+        // Running as a Batch worker - process assigned task
+        run_batch_worker(&args);
+        return;
+    }
+
+    if args.gcp_project.is_some() {
+        // Submit job to GCP Batch
+        run_gcp_batch_orchestration(&args);
+        return;
+    }
+
+    // Default: Local processing mode
     // Initialize CUDA if --gpu flag is set
     #[cfg(feature = "gpu")]
     if args.gpu {
