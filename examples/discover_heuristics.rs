@@ -92,6 +92,14 @@ enum Config {
     JpegliXyb { subsampling: Subsampling },
     /// Zenjpeg hybrid encoder (combines mozjpeg trellis + jpegli AQ)
     Zenjpeg { subsampling: Subsampling },
+    /// AVIF encoder via rav1e (pure Rust AV1 encoder)
+    /// speed: 1-10 (1=slowest/best, 10=fastest)
+    #[cfg(feature = "avif")]
+    Avif { subsampling: Subsampling, speed: u8 },
+    /// WebP encoder via libwebp (Google's WebP library)
+    /// method: 0-6 (0=fastest, 6=slowest/best compression)
+    #[cfg(feature = "webp")]
+    Webp { method: u8 },
 }
 
 /// Trait for encoding images with a configuration
@@ -122,6 +130,10 @@ impl Encode for Config {
             Config::Jpegli { subsampling } => format!("jpegli-{}", subsampling),
             Config::JpegliXyb { subsampling } => format!("jpegli-xyb-{}", subsampling),
             Config::Zenjpeg { subsampling } => format!("zenjpeg-{}", subsampling),
+            #[cfg(feature = "avif")]
+            Config::Avif { subsampling, speed } => format!("avif-{}-s{}", subsampling, speed),
+            #[cfg(feature = "webp")]
+            Config::Webp { method } => format!("webp-m{}", method),
         }
     }
 
@@ -157,6 +169,14 @@ impl Encode for Config {
             }
             Config::Zenjpeg { subsampling } => {
                 encode_zenjpeg(pixels, width, height, quality, *subsampling)
+            }
+            #[cfg(feature = "avif")]
+            Config::Avif { subsampling, speed } => {
+                encode_avif(pixels, width, height, quality, *subsampling, *speed)
+            }
+            #[cfg(feature = "webp")]
+            Config::Webp { method } => {
+                encode_webp(pixels, width, height, quality, *method)
             }
         }
     }
@@ -198,7 +218,7 @@ impl Config {
 
     /// Test subset - configs we actively benchmark
     fn test_subset() -> Vec<Config> {
-        vec![
+        let mut configs = vec![
             Config::MozJpeg {
                 subsampling: Subsampling::S420,
             },
@@ -223,12 +243,33 @@ impl Config {
             Config::Jpegli {
                 subsampling: Subsampling::S444,
             },
-        ]
+        ];
+
+        // Add AVIF configs when feature is enabled
+        #[cfg(feature = "avif")]
+        {
+            configs.push(Config::Avif {
+                subsampling: Subsampling::S420,
+                speed: 6, // Balanced speed
+            });
+            configs.push(Config::Avif {
+                subsampling: Subsampling::S444,
+                speed: 6,
+            });
+        }
+
+        // Add WebP configs when feature is enabled
+        #[cfg(feature = "webp")]
+        {
+            configs.push(Config::Webp { method: 4 }); // Balanced method
+        }
+
+        configs
     }
 
     /// All possible configs (including experimental/future)
     fn all() -> Vec<Config> {
-        vec![
+        let mut configs = vec![
             Config::MozJpeg {
                 subsampling: Subsampling::S420,
             },
@@ -250,7 +291,41 @@ impl Config {
             // Future:
             // Config::JpegliXyb { subsampling: Subsampling::S444 },
             // Config::Zenjpeg { subsampling: Subsampling::Auto },
-        ]
+        ];
+
+        // Add all AVIF configs when feature is enabled
+        #[cfg(feature = "avif")]
+        {
+            // Balanced speed (6) for 420 and 444
+            configs.push(Config::Avif {
+                subsampling: Subsampling::S420,
+                speed: 6,
+            });
+            configs.push(Config::Avif {
+                subsampling: Subsampling::S444,
+                speed: 6,
+            });
+            // Fast speed (10) for quick testing
+            configs.push(Config::Avif {
+                subsampling: Subsampling::S420,
+                speed: 10,
+            });
+            // Slow speed (3) for best quality
+            configs.push(Config::Avif {
+                subsampling: Subsampling::S420,
+                speed: 3,
+            });
+        }
+
+        // Add all WebP configs when feature is enabled
+        #[cfg(feature = "webp")]
+        {
+            // Method 0-6: 0=fastest, 6=slowest/best
+            configs.push(Config::Webp { method: 4 }); // Balanced
+            configs.push(Config::Webp { method: 6 }); // Best compression
+        }
+
+        configs
     }
 
     // =========================================================================
@@ -271,6 +346,10 @@ impl Config {
                 "examples/discover_heuristics.rs",
                 "src/", // Zenjpeg uses our own encoder
             ],
+            #[cfg(feature = "avif")]
+            Config::Avif { .. } => vec!["examples/discover_heuristics.rs"],
+            #[cfg(feature = "webp")]
+            Config::Webp { .. } => vec!["examples/discover_heuristics.rs"],
         }
     }
 
@@ -342,6 +421,26 @@ impl Config {
                 version: 3,
                 old_hash: "sha256:013018d04a91f977",
                 old_commit: "e04ea4db6538c6c4ba59fb04a38b8d29941704ec",
+            },
+
+            // ----------------------------------------------------------------
+            // AVIF configs (via ravif/rav1e)
+            // ----------------------------------------------------------------
+            #[cfg(feature = "avif")]
+            Config::Avif { .. } => VersionInfo {
+                version: 1,
+                old_hash: "",
+                old_commit: "",
+            },
+
+            // ----------------------------------------------------------------
+            // WebP configs (via libwebp)
+            // ----------------------------------------------------------------
+            #[cfg(feature = "webp")]
+            Config::Webp { .. } => VersionInfo {
+                version: 1,
+                old_hash: "",
+                old_commit: "",
             },
         }
     }
@@ -789,10 +888,11 @@ fn format_encoding_filename(
     config_key: &str,
     quality: u8,
     version: u32,
+    ext: &str,
 ) -> String {
     format!(
-        "{:.3}bpp_{:.1}ss_{:.2}ba_{}-q{}_v{}.jpg",
-        bpp, ssim2, ba, config_key, quality, version
+        "{:.3}bpp_{:.1}ss_{:.2}ba_{}-q{}_v{}.{}",
+        bpp, ssim2, ba, config_key, quality, version, ext
     )
 }
 
@@ -812,13 +912,13 @@ fn format_metrics_filename(
 
 /// Staging filename for phase 1 encoding (before metrics computed).
 /// Uses simple predictable name that can be looked up without knowing metrics.
-fn format_staged_filename(config_key: &str, quality: u8, version: u32) -> String {
-    format!("{}-q{}_v{}.staged.jpg", config_key, quality, version)
+fn format_staged_filename(config_key: &str, quality: u8, version: u32, ext: &str) -> String {
+    format!("{}-q{}_v{}.staged.{}", config_key, quality, version, ext)
 }
 
 /// Check if a final encoding exists (file with metrics in name).
-fn find_final_encoding(image_dir: &Path, config_key: &str, quality: u8, version: u32) -> Option<PathBuf> {
-    let suffix = format!("{}-q{}_v{}.jpg", config_key, quality, version);
+fn find_final_encoding(image_dir: &Path, config_key: &str, quality: u8, version: u32, ext: &str) -> Option<PathBuf> {
+    let suffix = format!("{}-q{}_v{}.{}", config_key, quality, version, ext);
     fs::read_dir(image_dir).ok().and_then(|entries| {
         entries
             .filter_map(|e| e.ok())
@@ -832,8 +932,8 @@ fn find_final_encoding(image_dir: &Path, config_key: &str, quality: u8, version:
 }
 
 /// Check if a staged encoding exists (waiting for metrics).
-fn find_staged_encoding(image_dir: &Path, config_key: &str, quality: u8, version: u32) -> Option<PathBuf> {
-    let name = format_staged_filename(config_key, quality, version);
+fn find_staged_encoding(image_dir: &Path, config_key: &str, quality: u8, version: u32, ext: &str) -> Option<PathBuf> {
+    let name = format_staged_filename(config_key, quality, version, ext);
     let path = image_dir.join(&name);
     if path.exists() {
         Some(path)
@@ -1084,6 +1184,71 @@ fn encode_zenjpeg(
     Err("zenjpeg encoder not yet implemented".to_string())
 }
 
+/// Encode RGB pixels to AVIF using ravif (rav1e backend)
+/// Note: ravif doesn't support explicit chroma subsampling control - it uses 4:4:4 internally
+/// The subsampling parameter is kept for API consistency but is ignored.
+#[cfg(feature = "avif")]
+fn encode_avif(
+    pixels: &[u8],
+    width: usize,
+    height: usize,
+    quality: u8,
+    _subsampling: Subsampling,
+    speed: u8,
+) -> Result<Vec<u8>, String> {
+    use ravif::{Encoder, Img, ColorModel, RGB8};
+
+    // Convert RGB bytes to RGB8 pixels
+    let rgb_pixels: Vec<RGB8> = pixels
+        .chunks_exact(3)
+        .map(|c| RGB8::new(c[0], c[1], c[2]))
+        .collect();
+
+    let img = Img::new(rgb_pixels.as_slice(), width, height);
+
+    // Map quality (1-100) to ravif quality (0-100 float)
+    let ravif_quality = quality as f32;
+
+    let encoder = Encoder::new()
+        .with_quality(ravif_quality)
+        .with_speed(speed)
+        .with_internal_color_model(ColorModel::YCbCr);
+
+    let result = encoder
+        .encode_rgb(img)
+        .map_err(|e| format!("AVIF encode failed: {:?}", e))?;
+
+    Ok(result.avif_file)
+}
+
+/// Encode RGB pixels to WebP using the webp crate
+#[cfg(feature = "webp")]
+fn encode_webp(
+    pixels: &[u8],
+    width: usize,
+    height: usize,
+    quality: u8,
+    method: u8,
+) -> Result<Vec<u8>, String> {
+    use webp::{Encoder, WebPConfig};
+
+    let encoder = Encoder::from_rgb(pixels, width as u32, height as u32);
+
+    // Create a custom config to set the method
+    let mut config = WebPConfig::new()
+        .map_err(|_| "WebP config init failed".to_string())?;
+
+    config.quality = quality as f32;
+    config.method = method as i32;
+
+    let result = encoder
+        .encode_advanced(&config)
+        .map_err(|e| format!("WebP encode failed: {:?}", e))?;
+
+    // Convert WebPMemory to Vec<u8>
+    Ok(result.to_vec())
+}
+
 fn decode_jpeg(data: &[u8]) -> Result<Vec<u8>, String> {
     use jpeg_decoder::Decoder;
 
@@ -1091,6 +1256,63 @@ fn decode_jpeg(data: &[u8]) -> Result<Vec<u8>, String> {
     decoder
         .decode()
         .map_err(|e| format!("JPEG decode failed: {:?}", e))
+}
+
+/// Decode AVIF to RGB bytes using the image crate
+#[cfg(feature = "avif")]
+fn decode_avif(_data: &[u8]) -> Result<Vec<u8>, String> {
+    // AVIF decoding requires libdav1d system library.
+    // To enable AVIF decoding:
+    // 1. Install libdav1d-dev: sudo apt-get install libdav1d-dev
+    // 2. Enable avif-native feature in Cargo.toml image dependency
+    Err("AVIF decoding requires libdav1d (install libdav1d-dev and rebuild with avif-native feature)".to_string())
+}
+
+/// Decode WebP to RGB bytes using the image crate
+#[cfg(feature = "webp")]
+fn decode_webp(data: &[u8]) -> Result<Vec<u8>, String> {
+    use webp::Decoder;
+
+    let decoder = Decoder::new(data);
+    let img = decoder.decode().ok_or_else(|| "WebP decode failed".to_string())?;
+
+    // Convert to RGB (WebP decoder returns RGBA or RGB depending on image)
+    let rgb_data = img.to_image().into_rgb8().into_raw();
+    Ok(rgb_data)
+}
+
+/// Decode encoded data based on config type
+fn decode_encoded(config: &Config, data: &[u8]) -> Result<Vec<u8>, String> {
+    match config {
+        Config::MozJpeg { .. }
+        | Config::MozJpegMax { .. }
+        | Config::CMozJpeg { .. }
+        | Config::CMozJpegMax { .. }
+        | Config::Jpegli { .. }
+        | Config::JpegliXyb { .. }
+        | Config::Zenjpeg { .. } => decode_jpeg(data),
+        #[cfg(feature = "avif")]
+        Config::Avif { .. } => decode_avif(data),
+        #[cfg(feature = "webp")]
+        Config::Webp { .. } => decode_webp(data),
+    }
+}
+
+/// Get file extension for a config
+fn config_extension(config: &Config) -> &'static str {
+    match config {
+        Config::MozJpeg { .. }
+        | Config::MozJpegMax { .. }
+        | Config::CMozJpeg { .. }
+        | Config::CMozJpegMax { .. }
+        | Config::Jpegli { .. }
+        | Config::JpegliXyb { .. }
+        | Config::Zenjpeg { .. } => "jpg",
+        #[cfg(feature = "avif")]
+        Config::Avif { .. } => "avif",
+        #[cfg(feature = "webp")]
+        Config::Webp { .. } => "webp",
+    }
 }
 
 /// Convert RGB8 slice to Vec<[u8; 3]> for fast-ssim2
@@ -1878,6 +2100,23 @@ fn process_work_item_with_processor(
                 cached: false,
             };
         }
+        #[cfg(feature = "avif")]
+        Config::Avif { subsampling, speed } => encode_avif(
+            &processor.rgb_pixels,
+            processor.width,
+            processor.height,
+            item.quality,
+            subsampling,
+            speed,
+        ),
+        #[cfg(feature = "webp")]
+        Config::Webp { method } => encode_webp(
+            &processor.rgb_pixels,
+            processor.width,
+            processor.height,
+            item.quality,
+            method,
+        ),
     };
 
     let jpeg_data = match encode_result {
@@ -1902,7 +2141,7 @@ fn process_work_item_with_processor(
 
     // Decode
     let decode_start = Instant::now();
-    let decoded = match decode_jpeg(&jpeg_data) {
+    let decoded = match decode_encoded(&item.config, &jpeg_data) {
         Ok(d) => d,
         Err(e) => {
             stats
@@ -1955,6 +2194,7 @@ fn process_work_item_with_processor(
     };
 
     // Write files with metric-based names (matches process_work_item behavior)
+    let ext = config_extension(&item.config);
     let jpg_name = format_encoding_filename(
         bpp,
         ssimulacra2,
@@ -1962,6 +2202,7 @@ fn process_work_item_with_processor(
         &config_key,
         item.quality,
         item.cache_version,
+        ext,
     );
     let json_name = format_metrics_filename(
         bpp,
@@ -2040,17 +2281,18 @@ fn encode_work_item_phase1(
     force: bool,
 ) -> EncodePhaseResult {
     let config_key = item.config.key();
+    let ext = config_extension(&item.config);
 
     // Check if final encoding already exists
     if !force {
-        if find_final_encoding(&item.image_dir, &config_key, item.quality, item.cache_version).is_some() {
+        if find_final_encoding(&item.image_dir, &config_key, item.quality, item.cache_version, ext).is_some() {
             stats.encodings_cached.fetch_add(1, Ordering::Relaxed);
             return EncodePhaseResult::AlreadyComplete;
         }
     }
 
     // Check if staged file already exists
-    let staged_path = item.image_dir.join(format_staged_filename(&config_key, item.quality, item.cache_version));
+    let staged_path = item.image_dir.join(format_staged_filename(&config_key, item.quality, item.cache_version, ext));
     if staged_path.exists() && !force {
         return EncodePhaseResult::Staged(staged_path);
     }
@@ -2087,6 +2329,23 @@ fn encode_work_item_phase1(
         Config::Zenjpeg { .. } => {
             return EncodePhaseResult::Failed("Zenjpeg not implemented".to_string());
         }
+        #[cfg(feature = "avif")]
+        Config::Avif { subsampling, speed } => encode_avif(
+            &item.rgb_pixels,
+            item.width,
+            item.height,
+            item.quality,
+            subsampling,
+            speed,
+        ),
+        #[cfg(feature = "webp")]
+        Config::Webp { method } => encode_webp(
+            &item.rgb_pixels,
+            item.width,
+            item.height,
+            item.quality,
+            method,
+        ),
     };
 
     let jpeg_data = match encode_result {
@@ -2121,6 +2380,7 @@ fn process_staged_items_phase2(
 ) -> Vec<WorkResult> {
     items.iter().map(|(item, staged_path)| {
         let config_key = item.config.key();
+        let ext = config_extension(&item.config);
 
         // Read and decode the staged JPEG
         let jpeg_data = match fs::read(staged_path) {
@@ -2136,7 +2396,7 @@ fn process_staged_items_phase2(
         };
 
         let decode_start = Instant::now();
-        let decoded = match decode_jpeg(&jpeg_data) {
+        let decoded = match decode_encoded(&item.config, &jpeg_data) {
             Ok(d) => d,
             Err(e) => {
                 return WorkResult {
@@ -2190,6 +2450,7 @@ fn process_staged_items_phase2(
             &config_key,
             item.quality,
             item.cache_version,
+            ext,
         );
         let json_name = format_metrics_filename(
             bpp,
@@ -3569,6 +3830,7 @@ fn print_summary(stats: &AtomicRunStats, elapsed: std::time::Duration) {
 #[allow(dead_code)]
 fn process_work_item(item: &WorkItem, stats: &AtomicRunStats, args: &Args) -> WorkResult {
     let config_key = item.config.key();
+    let ext = config_extension(&item.config);
 
     // Check for existing cache
     let pattern = format!(
@@ -3618,7 +3880,7 @@ fn process_work_item(item: &WorkItem, stats: &AtomicRunStats, args: &Args) -> Wo
 
     // Decode and measure
     let decode_start = Instant::now();
-    let decoded = match decode_jpeg(&jpeg_data) {
+    let decoded = match decode_encoded(&item.config, &jpeg_data) {
         Ok(d) => d,
         Err(e) => {
             return WorkResult {
@@ -3672,6 +3934,7 @@ fn process_work_item(item: &WorkItem, stats: &AtomicRunStats, args: &Args) -> Wo
         &config_key,
         item.quality,
         item.cache_version,
+        ext,
     );
     let json_name = format_metrics_filename(
         bpp,

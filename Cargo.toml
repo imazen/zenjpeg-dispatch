@@ -2,7 +2,7 @@
 name = "zenjpeg"
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.70.0"
+rust-version = "1.92.0"
 license = "BSD-3-Clause"
 description = "High-quality JPEG encoder combining mozjpeg and jpegli approaches for Pareto-optimal compression"
 keywords = ["jpeg", "encoder", "compression", "image", "perceptual"]
@@ -13,6 +13,9 @@ default = []
 simd = []  # Enable SIMD intrinsics
 ffi-tests = ["jpegli-internals-sys"]  # Enable C++ FFI comparison tests
 gpu = ["ssimulacra2-cuda", "dssim-cuda", "butteraugli-cuda", "cudarse-driver", "cudarse-npp"]  # GPU-accelerated metrics (requires CUDA)
+avif = ["dep:ravif", "dep:image"]  # AVIF encoding via rav1e, decoding via image
+webp = ["dep:webp", "dep:image"]  # WebP encoding via webp crate, decoding via image
+all-codecs = ["avif", "webp"]  # All codec support
 
 [dependencies]
 # Core utilities
@@ -39,6 +42,16 @@ dssim-cuda = { path = "../turbo-metrics/crates/dssim-cuda", optional = true }
 butteraugli-cuda = { path = "../turbo-metrics/crates/butteraugli-cuda", optional = true }
 cudarse-driver = { path = "../turbo-metrics/crates/cudarse/cudarse-driver", optional = true }
 cudarse-npp = { path = "../turbo-metrics/crates/cudarse/cudarse-npp", features = ["isu", "ist"], optional = true }
+
+# AVIF support (optional, requires --features avif)
+ravif = { version = "0.12", optional = true }  # AVIF encoding via rav1e (pure Rust)
+
+# Image decoding (for WebP)
+# Note: AVIF decoding requires libdav1d system library - enable avif-native feature and install libdav1d-dev
+image = { version = "0.25", optional = true, default-features = false, features = ["webp"] }
+
+# WebP support (optional, requires --features webp)
+webp = { version = "0.3", optional = true }  # WebP encoding/decoding
 
 [dev-dependencies]
 # Image I/O
