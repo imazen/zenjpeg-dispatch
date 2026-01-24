@@ -208,7 +208,7 @@ impl Encoder {
     ///
     /// # Example
     /// ```
-    /// use zenjpeg::{Encoder, OptimizeFor};
+    /// use zenjpeg_dispatch::{Encoder, OptimizeFor};
     ///
     /// let encoder = Encoder::new()
     ///     .optimize_for(OptimizeFor::Dssim);  // Optimize for structural similarity
@@ -468,33 +468,47 @@ impl Encoder {
         }
     }
 
-    /// Encode RGB image using our forked jpegli encoder.
+    /// Encode RGB image using the zenjpeg encoder.
     ///
-    /// Uses the forked jpegli module for full perceptual quality:
-    /// - XYB color space processing
+    /// Uses the zenjpeg encoder for full perceptual quality:
+    /// - YCbCr or XYB color space processing
     /// - Butteraugli-based adaptive quantization
     /// - Perceptual coefficient optimization
     ///
-    /// Delegates to the jpegli-rs crate for full perceptual quality encoding.
+    /// Delegates to the zenjpeg crate for full perceptual quality encoding.
     fn encode_rgb_with_jpegli(
         &self,
         pixels: &[u8],
         width: usize,
         height: usize,
     ) -> Result<Vec<u8>> {
+        use zenjpeg_encoder::encoder::{
+            ChromaSubsampling, EncoderConfig, PixelLayout, Unstoppable,
+        };
+
         let q = self.quality.value();
 
-        let result = jpegli::Encoder::new()
-            .width(width as u32)
-            .height(height as u32)
-            .pixel_format(jpegli::PixelFormat::Rgb)
-            .quality(jpegli::quant::Quality::Traditional(q))
-            .encode(pixels);
+        let config = EncoderConfig::ycbcr(q, ChromaSubsampling::None);
+        let encode_result = config.encode_from_bytes(width as u32, height as u32, PixelLayout::Rgb8Srgb);
 
-        match result {
-            Ok(data) => Ok(data),
+        match encode_result {
+            Ok(mut encoder) => {
+                if let Err(e) = encoder.push_packed(pixels, Unstoppable) {
+                    return Err(Error::EncodingFailed {
+                        stage: "zenjpeg push",
+                        reason: format!("{:?}", e),
+                    });
+                }
+                match encoder.finish() {
+                    Ok(data) => Ok(data),
+                    Err(e) => Err(Error::EncodingFailed {
+                        stage: "zenjpeg finish",
+                        reason: format!("{:?}", e),
+                    }),
+                }
+            }
             Err(e) => Err(Error::EncodingFailed {
-                stage: "jpegli",
+                stage: "zenjpeg config",
                 reason: format!("{:?}", e),
             }),
         }
@@ -550,26 +564,38 @@ impl Encoder {
         }
     }
 
-    /// Encode grayscale image using the jpegli-rs crate.
+    /// Encode grayscale image using the zenjpeg crate.
     fn encode_gray_with_jpegli(
         &self,
         pixels: &[u8],
         width: usize,
         height: usize,
     ) -> Result<Vec<u8>> {
+        use zenjpeg_encoder::encoder::{EncoderConfig, PixelLayout, Unstoppable};
+
         let q = self.quality.value();
 
-        let result = jpegli::Encoder::new()
-            .width(width as u32)
-            .height(height as u32)
-            .pixel_format(jpegli::PixelFormat::Gray)
-            .quality(jpegli::quant::Quality::Traditional(q))
-            .encode(pixels);
+        let config = EncoderConfig::grayscale(q);
+        let encode_result = config.encode_from_bytes(width as u32, height as u32, PixelLayout::Gray8Srgb);
 
-        match result {
-            Ok(data) => Ok(data),
+        match encode_result {
+            Ok(mut encoder) => {
+                if let Err(e) = encoder.push_packed(pixels, Unstoppable) {
+                    return Err(Error::EncodingFailed {
+                        stage: "zenjpeg push",
+                        reason: format!("{:?}", e),
+                    });
+                }
+                match encoder.finish() {
+                    Ok(data) => Ok(data),
+                    Err(e) => Err(Error::EncodingFailed {
+                        stage: "zenjpeg finish",
+                        reason: format!("{:?}", e),
+                    }),
+                }
+            }
             Err(e) => Err(Error::EncodingFailed {
-                stage: "jpegli",
+                stage: "zenjpeg config",
                 reason: format!("{:?}", e),
             }),
         }

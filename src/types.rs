@@ -1,4 +1,4 @@
-//! Core types for zenjpeg
+//! Core types for zenjpeg-dispatch
 
 /// Color space for input pixels
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]

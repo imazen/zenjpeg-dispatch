@@ -1,15 +1,15 @@
-//! # zenjpeg - High-Quality JPEG Encoder
+//! # zenjpeg-dispatch - JPEG Encoder Dispatcher
 //!
-//! zenjpeg combines the best techniques from mozjpeg and jpegli to achieve
-//! Pareto-optimal compression across both low and high quality settings.
+//! zenjpeg-dispatch intelligently selects between mozjpeg and jpegli encoders
+//! based on image characteristics to achieve Pareto-optimal compression.
 //!
 //! ## Key Features
 //!
-//! - **Adaptive quality selection**: Automatically chooses the best encoding
-//!   strategy based on target quality
-//! - **Trellis quantization** (from mozjpeg): Rate-distortion optimized
+//! - **Adaptive codec selection**: Automatically chooses the best encoder
+//!   (mozjpeg or jpegli) based on target quality and image content
+//! - **Trellis quantization** (via mozjpeg): Rate-distortion optimized
 //!   coefficient selection, especially effective at low quality
-//! - **Adaptive quantization** (from jpegli): Content-aware bit allocation
+//! - **Adaptive quantization** (via jpegli): Content-aware bit allocation
 //!   based on perceptual importance
 //! - **Perceptual optimization**: Uses Butteraugli/SSIMULACRA2 for quality
 //!   assessment and tuning
@@ -17,7 +17,7 @@
 //! ## Usage
 //!
 //! ```rust,ignore
-//! use zenjpeg::{Encoder, Quality};
+//! use zenjpeg_dispatch::{Encoder, Quality};
 //!
 //! let encoder = Encoder::new()
 //!     .quality(Quality::Perceptual(85.0))
@@ -52,6 +52,7 @@ mod quant;
 pub mod adaptive_quant;
 mod deringing;
 mod progressive;
+pub mod sa_tables;
 mod trellis;
 
 // Strategy selection
@@ -72,9 +73,24 @@ pub mod unified_quality;
 pub use encode::Encoder;
 pub use error::Error;
 pub use progressive::ScanInfo;
-pub use types::{ColorSpace, EncodingStrategy, OptimizeFor, PixelFormat, Quality, ScanScript, Subsampling};
+pub use types::{
+    ColorSpace, EncodingStrategy, OptimizeFor, PixelFormat, Quality, ScanScript, Subsampling,
+};
 
-/// Result type for zenjpeg operations
+// Analysis and codec selection
+pub use analysis::{
+    analyze_image, select_codec_auto, select_codec_for_butteraugli, select_codec_for_dssim,
+    CodecRecommendation, ImageAnalysis, RecommendedApproach,
+};
+
+// Unified quality scale (Z = 0-100, where Z ≈ SSIM2)
+pub use unified_quality::{
+    butteraugli_to_unified_quality, dssim_to_unified_quality, select_codec_for_z,
+    ssimulacra2_to_unified_quality, unified_quality_to_target_butteraugli,
+    unified_quality_to_target_dssim, unified_quality_to_target_ssimulacra2,
+};
+
+/// Result type for zenjpeg-dispatch operations
 pub type Result<T> = std::result::Result<T, Error>;
 
 #[cfg(test)]

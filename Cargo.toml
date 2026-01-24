@@ -1,10 +1,10 @@
 [package]
-name = "zenjpeg"
+name = "zenjpeg-dispatch"
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.92.0"
 license = "BSD-3-Clause"
-description = "High-quality JPEG encoder combining mozjpeg and jpegli approaches for Pareto-optimal compression"
+description = "Dispatcher library for selecting optimal JPEG encoder (mozjpeg vs jpegli) based on image characteristics"
 keywords = ["jpeg", "encoder", "compression", "image", "perceptual"]
 categories = ["encoding", "multimedia::images"]
 
@@ -30,8 +30,8 @@ rgb = "0.8"
 
 # Reference implementations (for comparison and fallback)
 mozjpeg-oxide = { path = "../mozjpeg-rs", package = "mozjpeg-rs" }
-# jpegli-rs main branch - note: aq-tuning branch only adds benchmarking, not AQ algorithm changes
-jpegli = { path = "../jpegli-rs/jpegli-rs", package = "jpegli-rs" }
+# New zenjpeg encoder from jpegli-rs repository (replaces old jpegli-rs crate)
+zenjpeg-encoder = { path = "../jpegli-rs/zenjpeg", package = "zenjpeg" }
 
 # FFI bindings to C++ jpegli (optional, for verification tests)
 jpegli-internals-sys = { path = "../jpegli-rs/internal/jpegli-internals-sys", optional = true }

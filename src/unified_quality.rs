@@ -25,7 +25,7 @@
 //! This ensures monotonicity because the target itself is monotonic.
 
 use crate::adaptive_config::{AdaptiveConfig, EncoderBackend};
-use crate::bpp_mapping::{EncoderType, estimate_bpp, quality_for_target_bpp};
+use crate::bpp_mapping::{estimate_bpp, quality_for_target_bpp, EncoderType};
 
 /// Quality metric to optimize for
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -105,31 +105,55 @@ pub fn unified_quality_to_target_bpp(unified_q: u8, config: &UnifiedQualityConfi
     config.min_bpp * ratio.powf(t)
 }
 
-/// Maps unified quality to target Butteraugli score.
+/// Maps unified quality Z (0-100) to target Butteraugli distance.
 ///
-/// Butteraugli ranges:
-/// - < 0.5: Imperceptible difference
-/// - 0.5 - 1.0: Excellent quality
-/// - 1.0 - 2.0: Good quality
-/// - 2.0 - 4.0: Acceptable quality
-/// - 4.0 - 8.0: Low quality
-/// - > 8.0: Very low quality
+/// **Data-driven mapping** fitted from 18,191 data points across 86 images.
+/// Z is designed to equal SSIMULACRA2, so Z=75 means SSIM2=75.
 ///
-/// We map:
-/// - Q=100 → BA 0.3 (near-lossless)
-/// - Q=50 → BA 2.0 (acceptable)
-/// - Q=0 → BA 15.0 (very low, but still decodable)
+/// Formula: BA = 8.942 * exp(-0.01411 * Z)
+/// R² = 0.957
+///
+/// | Z | Butteraugli | Quality Level |
+/// |---|-------------|---------------|
+/// | 90 | 2.5 | Excellent |
+/// | 75 | 3.1 | Good |
+/// | 50 | 4.4 | Acceptable |
+/// | 25 | 6.3 | Low |
+/// | 0 | 8.9 | Very Low |
 pub fn unified_quality_to_target_butteraugli(unified_q: u8) -> f32 {
-    let t = unified_q as f32 / 100.0;
+    // Data-driven exponential fit from 18,191 samples
+    // BA(Z) = A * exp(-B * Z) + C
+    const A: f32 = 8.942026;
+    const B: f32 = 0.014111;
+    const C: f32 = 0.0;
 
-    // Exponential mapping: BA = 15 * 0.02^t
-    // At t=0: BA = 15
-    // At t=0.5: BA ≈ 2.1
-    // At t=1: BA = 0.3
-    15.0 * (0.02_f32).powf(t)
+    let z = unified_q as f32;
+    A * (-B * z).exp() + C
 }
 
-/// Maps unified quality to target SSIMULACRA2 score.
+/// Convert Butteraugli distance to unified quality Z (0-100).
+///
+/// Inverse of `unified_quality_to_target_butteraugli`.
+/// Z = -ln((BA - C) / A) / B
+#[must_use]
+pub fn butteraugli_to_unified_quality(ba: f32) -> f32 {
+    const A: f32 = 8.942026;
+    const B: f32 = 0.014111;
+    const C: f32 = 0.0;
+
+    if ba <= C {
+        return 100.0;
+    }
+    let ratio = (ba - C) / A;
+    if ratio <= 0.0 {
+        return 100.0;
+    }
+    (-ratio.ln() / B).clamp(0.0, 100.0)
+}
+
+/// Maps unified quality Z (0-100) to target SSIMULACRA2 score.
+///
+/// **By design, Z = SSIM2.** This is the anchor metric for the unified scale.
 ///
 /// SSIMULACRA2 ranges:
 /// - 90+: Excellent (near-lossless)
@@ -137,17 +161,63 @@ pub fn unified_quality_to_target_butteraugli(unified_q: u8) -> f32 {
 /// - 50-70: Acceptable
 /// - 30-50: Low quality
 /// - < 30: Very low quality
-///
-/// We map:
-/// - Q=100 → SSIM2 98
-/// - Q=50 → SSIM2 75
-/// - Q=0 → SSIM2 30
 pub fn unified_quality_to_target_ssimulacra2(unified_q: u8) -> f32 {
-    let t = unified_q as f32 / 100.0;
+    // Z = SSIM2 by design (direct mapping)
+    unified_q as f32
+}
 
-    // Linear-ish mapping with slight curve
-    // SSIM2 = 30 + 68 * t^0.8
-    30.0 + 68.0 * t.powf(0.8)
+/// Convert SSIMULACRA2 score to unified quality Z (0-100).
+///
+/// By design, Z = SSIM2.
+#[must_use]
+pub fn ssimulacra2_to_unified_quality(ssim2: f32) -> f32 {
+    ssim2.clamp(-10.0, 100.0)
+}
+
+/// Maps unified quality Z (0-100) to target DSSIM value.
+///
+/// **Data-driven mapping** fitted from 18,191 data points across 86 images.
+///
+/// Formula: DSSIM = 0.02277 * exp(-0.02589 * Z)
+/// R² = 0.979
+///
+/// | Z | DSSIM | Quality Level |
+/// |---|-------|---------------|
+/// | 90 | 0.0022 | Excellent |
+/// | 75 | 0.0033 | Good |
+/// | 50 | 0.0062 | Acceptable |
+/// | 25 | 0.0117 | Low |
+/// | 0 | 0.0228 | Very Low |
+#[must_use]
+pub fn unified_quality_to_target_dssim(unified_q: u8) -> f32 {
+    // Data-driven exponential fit from 18,191 samples
+    // DSSIM(Z) = A * exp(-B * Z) + C
+    const A: f32 = 0.022_769_09;
+    const B: f32 = 0.025_895;
+    const C: f32 = 0.0;
+
+    let z = unified_q as f32;
+    A * (-B * z).exp() + C
+}
+
+/// Convert DSSIM value to unified quality Z (0-100).
+///
+/// Inverse of `unified_quality_to_target_dssim`.
+/// Z = -ln((DSSIM - C) / A) / B
+#[must_use]
+pub fn dssim_to_unified_quality(dssim: f32) -> f32 {
+    const A: f32 = 0.022_769_09;
+    const B: f32 = 0.025_895;
+    const C: f32 = 0.0;
+
+    if dssim <= C {
+        return 100.0;
+    }
+    let ratio = (dssim - C) / A;
+    if ratio <= 0.0 {
+        return 100.0;
+    }
+    (-ratio.ln() / B).clamp(0.0, 100.0)
 }
 
 /// Recommends the best codec for a target bpp based on RD characteristics.
@@ -156,7 +226,10 @@ pub fn unified_quality_to_target_ssimulacra2(unified_q: u8) -> f32 {
 /// - < 0.24 bpp: Only mozjpeg can reach this (jpegli has quality floor)
 /// - 0.24-0.30 bpp: Crossover zone, image-dependent
 /// - > 0.30 bpp: jpegli typically wins on perceptual quality
-pub fn recommend_codec_for_bpp(target_bpp: f32, _image_analysis: Option<&ImageAnalysis>) -> EncoderType {
+pub fn recommend_codec_for_bpp(
+    target_bpp: f32,
+    _image_analysis: Option<&ImageAnalysis>,
+) -> EncoderType {
     // TODO: Use image_analysis to refine decision
     // For now, use simple bpp-based heuristic
 
@@ -169,6 +242,68 @@ pub fn recommend_codec_for_bpp(target_bpp: f32, _image_analysis: Option<&ImageAn
     } else {
         // jpegli wins on perceptual quality at higher bpp
         EncoderType::Jpegli
+    }
+}
+
+/// Select the optimal codec for a target unified quality Z.
+///
+/// This combines the metric-specific heuristics, routing to the appropriate
+/// selection function based on which metric you're optimizing for.
+///
+/// # Key Insight
+///
+/// Different metrics have **opposite** optimal codec preferences:
+/// - **Butteraugli**: jpegli wins at most quality levels
+/// - **DSSIM**: mozjpeg wins at most quality levels
+/// - **SSIMULACRA2**: similar to Butteraugli (perceptual correlation)
+///
+/// # Arguments
+///
+/// * `analysis` - Image analysis from `crate::analysis::analyze_image`
+/// * `target_z` - Target unified quality (0-100, where Z ≈ SSIM2)
+/// * `optimize_for` - Which metric to optimize for
+///
+/// # Example
+///
+/// ```ignore
+/// use zenjpeg_dispatch::{analyze_image, OptimizeFor};
+/// use zenjpeg_dispatch::unified_quality::select_codec_for_z;
+///
+/// let analysis = analyze_image(&pixels, width, height, 75.0);
+/// let codec = select_codec_for_z(&analysis, 75.0, OptimizeFor::Butteraugli);
+/// ```
+#[must_use]
+pub fn select_codec_for_z(
+    analysis: &crate::analysis::ImageAnalysis,
+    target_z: f32,
+    optimize_for: crate::types::OptimizeFor,
+) -> crate::analysis::CodecRecommendation {
+    use crate::analysis::{
+        select_codec_for_butteraugli, select_codec_for_dssim, CodecRecommendation,
+    };
+    use crate::types::{OptimizeFor, Subsampling};
+
+    match optimize_for {
+        OptimizeFor::Butteraugli => {
+            let target_ba = unified_quality_to_target_butteraugli(target_z as u8);
+            select_codec_for_butteraugli(analysis, target_ba)
+        }
+        OptimizeFor::Dssim => {
+            let target_dssim = unified_quality_to_target_dssim(target_z as u8);
+            select_codec_for_dssim(analysis, target_dssim)
+        }
+        OptimizeFor::Ssimulacra2 => {
+            // SSIM2 correlates strongly with Butteraugli (r = -0.88)
+            // Use Butteraugli heuristic as proxy
+            let target_ba = unified_quality_to_target_butteraugli(target_z as u8);
+            select_codec_for_butteraugli(analysis, target_ba)
+        }
+        OptimizeFor::FileSize => {
+            // For pure file size optimization, mozjpeg-420 wins
+            CodecRecommendation::MozJpeg {
+                subsampling: Subsampling::S420,
+            }
+        }
     }
 }
 
@@ -195,19 +330,19 @@ impl ImageAnalysis {
         let mut analysis = Self::default();
 
         // Calculate variance (simplified: just luminance variance)
-        let luma: Vec<f32> = pixels.chunks(3)
+        let luma: Vec<f32> = pixels
+            .chunks(3)
             .map(|rgb| 0.299 * rgb[0] as f32 + 0.587 * rgb[1] as f32 + 0.114 * rgb[2] as f32)
             .collect();
 
         let mean: f32 = luma.iter().sum::<f32>() / luma.len() as f32;
-        analysis.variance = luma.iter()
-            .map(|&l| (l - mean).powi(2))
-            .sum::<f32>() / luma.len() as f32;
+        analysis.variance =
+            luma.iter().map(|&l| (l - mean).powi(2)).sum::<f32>() / luma.len() as f32;
 
         // Estimate edge density using simple gradient
         let mut edge_sum = 0.0f32;
-        for y in 1..height-1 {
-            for x in 1..width-1 {
+        for y in 1..height - 1 {
+            for x in 1..width - 1 {
                 let idx = y * width + x;
                 let gx = (luma[idx + 1] - luma[idx - 1]).abs();
                 let gy = (luma[idx + width] - luma[idx - width]).abs();
@@ -281,9 +416,7 @@ impl ImageAnalysis {
         // - High chroma complexity
         // - Few uniform blocks (photos, not graphics)
 
-        self.variance > 500.0
-            && self.chroma_complexity > 0.1
-            && self.uniform_block_fraction < 0.3
+        self.variance > 500.0 && self.chroma_complexity > 0.1 && self.uniform_block_fraction < 0.3
     }
 
     /// Suggest whether this image can tolerate aggressive subsampling
@@ -357,7 +490,13 @@ mod tests {
         let mut prev_bpp = 0.0;
         for q in 0..=100 {
             let bpp = unified_quality_to_target_bpp(q, &config);
-            assert!(bpp >= prev_bpp, "bpp should increase with quality: Q{} bpp={} < prev={}", q, bpp, prev_bpp);
+            assert!(
+                bpp >= prev_bpp,
+                "bpp should increase with quality: Q{} bpp={} < prev={}",
+                q,
+                bpp,
+                prev_bpp
+            );
             prev_bpp = bpp;
         }
     }
@@ -367,7 +506,13 @@ mod tests {
         let mut prev_ba = f32::MAX;
         for q in 0..=100 {
             let ba = unified_quality_to_target_butteraugli(q);
-            assert!(ba <= prev_ba, "butteraugli should decrease with quality: Q{} ba={} > prev={}", q, ba, prev_ba);
+            assert!(
+                ba <= prev_ba,
+                "butteraugli should decrease with quality: Q{} ba={} > prev={}",
+                q,
+                ba,
+                prev_ba
+            );
             prev_ba = ba;
         }
     }
@@ -377,7 +522,13 @@ mod tests {
         let mut prev_ssim2 = 0.0;
         for q in 0..=100 {
             let ssim2 = unified_quality_to_target_ssimulacra2(q);
-            assert!(ssim2 >= prev_ssim2, "ssim2 should increase with quality: Q{} ssim2={} < prev={}", q, ssim2, prev_ssim2);
+            assert!(
+                ssim2 >= prev_ssim2,
+                "ssim2 should increase with quality: Q{} ssim2={} < prev={}",
+                q,
+                ssim2,
+                prev_ssim2
+            );
             prev_ssim2 = ssim2;
         }
     }
@@ -414,9 +565,9 @@ mod tests {
         for y in 0..height {
             for x in 0..width {
                 let idx = (y * width + x) * 3;
-                pixels[idx] = (x * 4) as u8;     // R gradient
+                pixels[idx] = (x * 4) as u8; // R gradient
                 pixels[idx + 1] = (y * 4) as u8; // G gradient
-                pixels[idx + 2] = 128;            // B constant
+                pixels[idx + 2] = 128; // B constant
             }
         }
 
@@ -443,5 +594,118 @@ mod tests {
         // High quality should use jpegli
         let (codec, _q, _cfg) = unified_quality_to_config(80, None, &config);
         assert_eq!(codec, EncoderType::Jpegli);
+    }
+
+    #[test]
+    fn test_dssim_mapping_monotonic() {
+        let mut prev_dssim = f32::MAX;
+        for q in 0..=100 {
+            let dssim = unified_quality_to_target_dssim(q);
+            assert!(
+                dssim <= prev_dssim,
+                "dssim should decrease with quality: Q{} dssim={} > prev={}",
+                q,
+                dssim,
+                prev_dssim
+            );
+            prev_dssim = dssim;
+        }
+    }
+
+    #[test]
+    fn test_butteraugli_roundtrip() {
+        // Test roundtrip conversion
+        for z in [0, 25, 50, 75, 90, 100] {
+            let ba = unified_quality_to_target_butteraugli(z);
+            let z_back = butteraugli_to_unified_quality(ba);
+            assert!(
+                (z_back - z as f32).abs() < 1.0,
+                "Roundtrip failed: z={}, ba={}, z_back={}",
+                z,
+                ba,
+                z_back
+            );
+        }
+    }
+
+    #[test]
+    fn test_dssim_roundtrip() {
+        // Test roundtrip conversion
+        for z in [0, 25, 50, 75, 90, 100] {
+            let dssim = unified_quality_to_target_dssim(z);
+            let z_back = dssim_to_unified_quality(dssim);
+            assert!(
+                (z_back - z as f32).abs() < 1.0,
+                "Roundtrip failed: z={}, dssim={}, z_back={}",
+                z,
+                dssim,
+                z_back
+            );
+        }
+    }
+
+    #[test]
+    fn test_ssim2_identity() {
+        // Z = SSIM2 by design
+        for z in 0..=100 {
+            let ssim2 = unified_quality_to_target_ssimulacra2(z);
+            assert_eq!(ssim2, z as f32, "Z should equal SSIM2");
+        }
+    }
+
+    #[test]
+    fn test_select_codec_for_z() {
+        use crate::analysis::analyze_image;
+        use crate::types::OptimizeFor;
+
+        let pixels = vec![128u8; 64 * 64 * 3];
+        let analysis = analyze_image(&pixels, 64, 64, 75.0);
+
+        // For Butteraugli at high Z, should recommend jpegli
+        let rec = select_codec_for_z(&analysis, 80.0, OptimizeFor::Butteraugli);
+        assert!(rec.is_jpegli());
+
+        // For DSSIM at same Z, should recommend mozjpeg (opposite preference)
+        let rec = select_codec_for_z(&analysis, 80.0, OptimizeFor::Dssim);
+        assert!(rec.is_mozjpeg());
+
+        // For FileSize, always mozjpeg-420
+        let rec = select_codec_for_z(&analysis, 80.0, OptimizeFor::FileSize);
+        assert!(rec.is_mozjpeg());
+        assert_eq!(rec.subsampling(), crate::types::Subsampling::S420);
+    }
+
+    #[test]
+    fn test_data_driven_values() {
+        // Verify the data-driven mappings match expected values from analysis
+        // At Z=50: BA ≈ 4.4, DSSIM ≈ 0.0062
+        let ba_50 = unified_quality_to_target_butteraugli(50);
+        assert!(
+            ba_50 > 4.0 && ba_50 < 5.0,
+            "BA at Z=50 should be ~4.4, got {}",
+            ba_50
+        );
+
+        let dssim_50 = unified_quality_to_target_dssim(50);
+        assert!(
+            dssim_50 > 0.005 && dssim_50 < 0.008,
+            "DSSIM at Z=50 should be ~0.0062, got {}",
+            dssim_50
+        );
+
+        // At Z=75: BA ≈ 3.1, DSSIM ≈ 0.0033
+        let ba_75 = unified_quality_to_target_butteraugli(75);
+        assert!(
+            ba_75 > 2.5 && ba_75 < 3.5,
+            "BA at Z=75 should be ~3.1, got {}",
+            ba_75
+        );
+
+        let dssim_75 = unified_quality_to_target_dssim(75);
+        assert!(
+            dssim_75 > 0.002 && dssim_75 < 0.005,
+            "DSSIM at Z=75 should be ~0.0033, got {}",
+            dssim_75
+        );
     }
 }

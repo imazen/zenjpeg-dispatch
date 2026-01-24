@@ -1,15 +1,17 @@
-# zenjpeg Development Guide
+# zenjpeg-dispatch Development Guide
 
 ## Project Overview
 
-zenjpeg is a high-quality JPEG encoder that combines the best techniques from mozjpeg and jpegli to achieve Pareto-optimal compression at both low and high quality settings.
+zenjpeg-dispatch is a dispatcher library that intelligently selects between mozjpeg and jpegli encoders based on image characteristics to achieve Pareto-optimal compression.
 
-**Key insight**: mozjpeg's trellis quantization excels at low quality (Q < 70), while jpegli's adaptive quantization excels at high quality (Q >= 70). zenjpeg automatically selects the best strategy.
+**Key insight**: mozjpeg's trellis quantization excels at low quality (Q < 70), while jpegli's adaptive quantization excels at high quality (Q >= 70). zenjpeg-dispatch automatically selects the best encoder.
+
+**Note**: The main zenjpeg encoder (a pure Rust implementation) is now at `jpegli-rs/zenjpeg`. This library (`zenjpeg-dispatch`) provides the codec selection/dispatching logic.
 
 ## Quick Start
 
 ```bash
-cd /home/lilith/work/zenjpeg
+cd /home/lilith/work/zenjpeg-dispatch
 cargo test          # Run tests
 cargo build         # Build library
 
@@ -27,7 +29,7 @@ CUDA_PATH=/usr/local/cuda-12.6 cargo run --release --features gpu \
 ## Architecture
 
 ```
-zenjpeg/
+zenjpeg-dispatch/
 ├── src/
 │   ├── lib.rs              # Public API re-exports
 │   ├── error.rs            # Error types (#[non_exhaustive])
@@ -109,11 +111,11 @@ Based on benchmarks (336 images × 6 configs × 100 quality levels):
 | **Butteraugli** | jpegli-420 | 4.93% | Strongly dominates (50-60% wins) |
 | **DSSIM** | mozjpeg-max-420 | **1.01%** | Progressive encoding helps! |
 
-### zenjpeg Encoder Performance
+### Dispatch Performance (Historical)
 At SSIM2 >= 80 quality target:
 - jpegli: **1.310 bpp** (best efficiency)
 - mozjpeg-oxide: 1.437 bpp
-- **zenjpeg: 1.458 bpp** (only 1.5% larger than mozjpeg-oxide!)
+- zenjpeg-dispatch: 1.458 bpp (only 1.5% larger than mozjpeg-oxide!)
 
 ## Pending Work
 
