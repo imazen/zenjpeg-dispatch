@@ -18,12 +18,12 @@ cargo build         # Build library
 # Run heuristic discovery benchmark (CPU)
 # IMPORTANT: Use /mnt/v/discover/ for output, NEVER /tmp (data is hours to regenerate)
 cargo run --release --example discover_heuristics -- \
-  --corpus ~/work/codec-corpus/kodak --output /mnt/v/discover/kodak
+  --corpus ~/work/codec-corpus/CID22/CID22-512/training --output /mnt/v/discover/cid22
 
 # Run with GPU-accelerated SSIM2 (requires CUDA)
 CUDA_PATH=/usr/local/cuda-12.6 cargo run --release --features gpu \
   --example discover_heuristics -- \
-  --corpus ~/work/codec-corpus/kodak --output /mnt/v/discover/kodak --gpu
+  --corpus ~/work/codec-corpus/CID22/CID22-512/training --output /mnt/v/discover/cid22 --gpu
 ```
 
 ## Architecture
@@ -87,13 +87,13 @@ Phase 2: Sequential GPU metrics per image
   - CUDA context is thread-local, requires sequential processing
   - GPU metrics: SSIM2 + DSSIM + Butteraugli
 
-Full Kodak benchmark (24 images × 8 configs × 100 quality levels):
-  Wall clock: 675s (11 minutes)
-  Encoding:   695s CPU time (distributed across parallel workers)
-  Metrics:    172s (GPU-accelerated)
+Full CID22 benchmark (209 images × 8 configs × 100 quality levels):
+  Wall clock: ~90min
+  Encoding:   distributed across parallel workers
+  Metrics:    GPU-accelerated
 ```
 
-**GPU Performance Breakdown (Kodak, 19,200 encodings):**
+**GPU Performance Breakdown (CID22, 19,200 encodings):**
 ```
 Encoding:      694.9s  (74.4%)   # Parallelized across all cores
 Decoding:       67.4s  ( 7.2%)
@@ -226,18 +226,18 @@ cargo test -- --nocapture     # Show output
 # Full benchmark with GPU acceleration
 CUDA_PATH=/usr/local/cuda-12.6 cargo run --release --features gpu \
   --example discover_heuristics -- \
-  --corpus ~/work/codec-corpus/kodak \
+  --corpus ~/work/codec-corpus/CID22/CID22-512/training \
   --output ./results \
   --gpu
 
 # CPU-only benchmark
 cargo run --release --example discover_heuristics -- \
-  --corpus ~/work/codec-corpus/kodak \
+  --corpus ~/work/codec-corpus/CID22/CID22-512/training \
   --output ./results
 
 # Quick test (1 image)
 cargo run --release --example discover_heuristics -- \
-  --corpus ~/work/codec-corpus/kodak \
+  --corpus ~/work/codec-corpus/CID22/CID22-512/training \
   --output ./results \
   --max-images 1
 ```
@@ -254,8 +254,10 @@ cargo run --release --example discover_heuristics -- \
 
 ## Corpus Locations
 
-- **Kodak**: `~/work/codec-corpus/kodak/` (24 images, 768x512 / 512x768)
-- **CID22**: `~/work/codec-corpus/CID22/CID22-512/training/` (209 images, 512x512)
+- **CID22 training**: `~/work/codec-corpus/CID22/CID22-512/training/` (209 images, 512x512)
+- **CID22 validation**: `~/work/codec-corpus/CID22/CID22-512/validation/` (41 images, 512x512)
+- **CLIC2025 validation**: `~/work/codec-corpus/clic2025/validation/` (32 images, variable size)
+- **CLIC2025 final-test**: `~/work/codec-corpus/clic2025/final-test/` (30 images, variable size)
 
 ## References
 

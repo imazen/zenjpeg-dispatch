@@ -45,7 +45,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .metrics(metrics)
         .quality_levels(vec![
             // Low bpp range (0.05-0.30) - critical for mozjpeg vs jpegli crossover analysis
-            1.0, 2.0, 3.0, 4.0, 5.0, 10.0, 15.0, 20.0, 30.0,
+            1.0, 2.0, 3.0, 4.0, 5.0, 10.0, 15.0, 20.0,
+            30.0,
             // Medium-high quality range (commented out for speed - focus on low bpp)
             // 40.0, 50.0, 60.0, 70.0, 75.0, 80.0, 85.0, 90.0, 95.0,
         ])
@@ -126,7 +127,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Registered {} codecs", session.codec_count());
 
     // Find test images
-    let corpus_dir = PathBuf::from("../codec-eval/codec-corpus/kodak");
+    let corpus_dir = PathBuf::from("../codec-eval/codec-corpus/CID22/CID22-512/training");
     let test_images: Vec<PathBuf> = if corpus_dir.exists() {
         fs::read_dir(&corpus_dir)?
             .filter_map(|e| e.ok())
@@ -136,7 +137,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .collect()
     } else {
         println!(
-            "Kodak corpus not found at {:?}, using synthetic image",
+            "CID22 corpus not found at {:?}, using synthetic image",
             corpus_dir
         );
         vec![]

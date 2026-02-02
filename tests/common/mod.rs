@@ -45,7 +45,9 @@ pub fn try_get_cpp_testdata_path(filename: &str) -> Option<PathBuf> {
             PathBuf::from(&manifest).join("testdata").join(filename),
             PathBuf::from(&manifest).join("../testdata").join(filename),
             PathBuf::from(&manifest).join("../jpegli").join(filename),
-            PathBuf::from(&manifest).join("../jpegli-rs/internal/jpegli-cpp").join(filename),
+            PathBuf::from(&manifest)
+                .join("../jpegli-rs/internal/jpegli-cpp")
+                .join(filename),
             PathBuf::from(filename),
         ];
         for path in candidates {
@@ -185,9 +187,9 @@ pub fn get_kodim01_path() -> PathBuf {
     })
 }
 
-/// Try to get path to kodim01.png.
+/// Try to get path to a test image from the corpus.
 pub fn try_get_kodim01_path() -> Option<PathBuf> {
-    let path = try_get_codec_corpus_dir()?.join("kodak/kodim01.png");
+    let path = try_get_codec_corpus_dir()?.join("CID22/CID22-512/training/CID22_SS01_001_0001.png");
     if path.exists() {
         Some(path)
     } else {

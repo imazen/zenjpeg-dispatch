@@ -21,7 +21,7 @@ fn get_test_image() -> Option<(Vec<u8>, u32, u32)> {
 
     // Try relative paths
     let candidates = [
-        PathBuf::from("../codec-corpus/kodak/kodim01.png"),
+        PathBuf::from("../codec-corpus/CID22/CID22-512/training/CID22_SS01_001_0001.png"),
         PathBuf::from("testdata/test.png"),
     ];
 

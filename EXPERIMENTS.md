@@ -431,10 +431,10 @@ cargo run --release --example corpus_reduction -- <corpus_dir> [output_dir]
 
 **Example**:
 ```bash
-cargo run --release --example corpus_reduction -- ../codec-eval/codec-corpus/kodak reduced_corpus
+cargo run --release --example corpus_reduction -- ../codec-eval/codec-corpus/CID22/CID22-512/training reduced_corpus
 ```
 
-### Results (Kodak corpus)
+### Results (24-image corpus)
 
 | Original | Reduced | Size Reduction |
 |----------|---------|----------------|

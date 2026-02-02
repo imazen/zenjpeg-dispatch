@@ -8,7 +8,7 @@
 //!   cargo run --release --example corpus_reduction -- <corpus_dir> [output_dir]
 //!
 //! Example:
-//!   cargo run --release --example corpus_reduction -- ../codec-eval/codec-corpus/kodak reduced_corpus
+//!   cargo run --release --example corpus_reduction -- ../codec-eval/codec-corpus/CID22/CID22-512/training reduced_corpus
 
 use dssim::Dssim;
 use rgb::RGBA8;

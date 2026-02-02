@@ -175,9 +175,7 @@ impl Encode for Config {
                 encode_avif(pixels, width, height, quality, *subsampling, *speed)
             }
             #[cfg(feature = "webp")]
-            Config::Webp { method } => {
-                encode_webp(pixels, width, height, quality, *method)
-            }
+            Config::Webp { method } => encode_webp(pixels, width, height, quality, *method),
         }
     }
 }
@@ -457,7 +455,7 @@ const ASSERT_UNCHANGED: bool = true; // Keep true until code is committed
 struct Args {
     /// Path(s) to corpus directories containing PNG images.
     /// Can specify multiple: --corpus path1 --corpus path2
-    /// Known corpora: kodak (24), CID22 (250), clic2025 (62)
+    /// Known corpora: CID22 (250), clic2025 (62)
     #[arg(long, required = true)]
     corpus: Vec<PathBuf>,
 
@@ -502,7 +500,6 @@ struct Args {
     gpu: bool,
 
     // ========== GCP Batch Arguments ==========
-
     /// GCP project ID for Batch execution (enables cloud mode)
     #[arg(long)]
     gcp_project: Option<String>,
@@ -673,11 +670,36 @@ impl AtomicRunStats {
         let total = encode + decode + butteraugli + ssim2 + dssim;
 
         println!("\n{:=^70}", " TIMING BREAKDOWN ");
-        println!("{:<20} {:>10.1}s  ({:>5.1}%)", "Encoding:", encode, 100.0 * encode / total);
-        println!("{:<20} {:>10.1}s  ({:>5.1}%)", "Decoding:", decode, 100.0 * decode / total);
-        println!("{:<20} {:>10.1}s  ({:>5.1}%)", "Butteraugli:", butteraugli, 100.0 * butteraugli / total);
-        println!("{:<20} {:>10.1}s  ({:>5.1}%)", "SSIMULACRA2:", ssim2, 100.0 * ssim2 / total);
-        println!("{:<20} {:>10.1}s  ({:>5.1}%)", "DSSIM:", dssim, 100.0 * dssim / total);
+        println!(
+            "{:<20} {:>10.1}s  ({:>5.1}%)",
+            "Encoding:",
+            encode,
+            100.0 * encode / total
+        );
+        println!(
+            "{:<20} {:>10.1}s  ({:>5.1}%)",
+            "Decoding:",
+            decode,
+            100.0 * decode / total
+        );
+        println!(
+            "{:<20} {:>10.1}s  ({:>5.1}%)",
+            "Butteraugli:",
+            butteraugli,
+            100.0 * butteraugli / total
+        );
+        println!(
+            "{:<20} {:>10.1}s  ({:>5.1}%)",
+            "SSIMULACRA2:",
+            ssim2,
+            100.0 * ssim2 / total
+        );
+        println!(
+            "{:<20} {:>10.1}s  ({:>5.1}%)",
+            "DSSIM:",
+            dssim,
+            100.0 * dssim / total
+        );
         println!("{:-<70}", "");
         println!("{:<20} {:>10.1}s", "Total measured:", total);
     }
@@ -959,7 +981,13 @@ fn format_staged_filename(config_key: &str, quality: u8, version: u32, ext: &str
 }
 
 /// Check if a final encoding exists (file with metrics in name).
-fn find_final_encoding(image_dir: &Path, config_key: &str, quality: u8, version: u32, ext: &str) -> Option<PathBuf> {
+fn find_final_encoding(
+    image_dir: &Path,
+    config_key: &str,
+    quality: u8,
+    version: u32,
+    ext: &str,
+) -> Option<PathBuf> {
     let suffix = format!("{}-q{}_v{}.{}", config_key, quality, version, ext);
     fs::read_dir(image_dir).ok().and_then(|entries| {
         entries
@@ -974,7 +1002,13 @@ fn find_final_encoding(image_dir: &Path, config_key: &str, quality: u8, version:
 }
 
 /// Check if a staged encoding exists (waiting for metrics).
-fn find_staged_encoding(image_dir: &Path, config_key: &str, quality: u8, version: u32, ext: &str) -> Option<PathBuf> {
+fn find_staged_encoding(
+    image_dir: &Path,
+    config_key: &str,
+    quality: u8,
+    version: u32,
+    ext: &str,
+) -> Option<PathBuf> {
     let name = format_staged_filename(config_key, quality, version, ext);
     let path = image_dir.join(&name);
     if path.exists() {
@@ -1238,7 +1272,7 @@ fn encode_avif(
     _subsampling: Subsampling,
     speed: u8,
 ) -> Result<Vec<u8>, String> {
-    use ravif::{Encoder, Img, ColorModel, RGB8};
+    use ravif::{ColorModel, Encoder, Img, RGB8};
 
     // Convert RGB bytes to RGB8 pixels
     let rgb_pixels: Vec<RGB8> = pixels
@@ -1277,8 +1311,7 @@ fn encode_webp(
     let encoder = Encoder::from_rgb(pixels, width as u32, height as u32);
 
     // Create a custom config to set the method
-    let mut config = WebPConfig::new()
-        .map_err(|_| "WebP config init failed".to_string())?;
+    let mut config = WebPConfig::new().map_err(|_| "WebP config init failed".to_string())?;
 
     config.quality = quality as f32;
     config.method = method as i32;
@@ -1316,7 +1349,9 @@ fn decode_webp(data: &[u8]) -> Result<Vec<u8>, String> {
     use webp::Decoder;
 
     let decoder = Decoder::new(data);
-    let img = decoder.decode().ok_or_else(|| "WebP decode failed".to_string())?;
+    let img = decoder
+        .decode()
+        .ok_or_else(|| "WebP decode failed".to_string())?;
 
     // Convert to RGB (WebP decoder returns RGBA or RGB depending on image)
     let rgb_data = img.to_image().into_rgb8().into_raw();
@@ -1359,9 +1394,7 @@ fn config_extension(config: &Config) -> &'static str {
 
 /// Convert RGB8 slice to Vec<[u8; 3]> for fast-ssim2
 fn rgb8_to_array(data: &[u8]) -> Vec<[u8; 3]> {
-    data.chunks_exact(3)
-        .map(|c| [c[0], c[1], c[2]])
-        .collect()
+    data.chunks_exact(3).map(|c| [c[0], c[1], c[2]]).collect()
 }
 
 /// Metric results with timing breakdown
@@ -1378,13 +1411,15 @@ struct MetricResults {
 // ImageProcessor - Lockstep processing with cached metric references
 // ============================================================================
 
-use butteraugli::{ButteraugliParams, precompute::ButteraugliReference};
+use butteraugli::{precompute::ButteraugliReference, ButteraugliParams};
 use codec_eval::metrics::dssim::{calculate_dssim, rgb8_to_dssim_image};
 use codec_eval::viewing::ViewingCondition;
 use fast_ssim2::Ssimulacra2Reference;
 use imgref::Img;
 
 // GPU-accelerated SSIM2 support (requires --features gpu)
+#[cfg(feature = "gpu")]
+use butteraugli_cuda::Butteraugli as GpuButteraugli;
 #[cfg(feature = "gpu")]
 use cudarse_driver::CuStream;
 #[cfg(feature = "gpu")]
@@ -1394,23 +1429,21 @@ use cudarse_npp::image::{Image as NppImage, Img as NppImg, ImgMut, C};
 #[cfg(feature = "gpu")]
 use cudarse_npp::set_stream;
 #[cfg(feature = "gpu")]
-use ssimulacra2_cuda::Ssimulacra2 as GpuSsimulacra2;
-#[cfg(feature = "gpu")]
 use dssim_cuda::Dssim as GpuDssim;
 #[cfg(feature = "gpu")]
-use butteraugli_cuda::Butteraugli as GpuButteraugli;
+use ssimulacra2_cuda::Ssimulacra2 as GpuSsimulacra2;
 
-/// GPU verification constants - based on observed max errors from 24-image Kodak benchmark
+/// GPU verification constants - based on observed max errors from 24-image benchmark
 #[cfg(feature = "gpu")]
-const GPU_VERIFY_INTERVAL: usize = 50;  // Verify every N tests
+const GPU_VERIFY_INTERVAL: usize = 50; // Verify every N tests
 #[cfg(feature = "gpu")]
-const GPU_SSIM2_EPSILON_PCT: f64 = 0.5;  // Max observed: 0.43% (relative error higher near zero values)
+const GPU_SSIM2_EPSILON_PCT: f64 = 0.5; // Max observed: 0.43% (relative error higher near zero values)
 #[cfg(feature = "gpu")]
-const GPU_SSIM2_EPSILON_ABS: f64 = 0.1;  // Absolute threshold for near-zero SSIM2 scores
+const GPU_SSIM2_EPSILON_ABS: f64 = 0.1; // Absolute threshold for near-zero SSIM2 scores
 #[cfg(feature = "gpu")]
-const GPU_DSSIM_EPSILON_PCT: f64 = 0.5;  // Max observed: 0.47% on CLIC2025 2048x images
+const GPU_DSSIM_EPSILON_PCT: f64 = 0.5; // Max observed: 0.47% on CLIC2025 2048x images
 #[cfg(feature = "gpu")]
-const GPU_BUTTERAUGLI_EPSILON_PCT: f64 = 12.0;  // Max observed: 11.37% (multi-scale algorithm variance)
+const GPU_BUTTERAUGLI_EPSILON_PCT: f64 = 12.0; // Max observed: 11.37% (multi-scale algorithm variance)
 
 /// Initialize CUDA once at startup
 #[cfg(feature = "gpu")]
@@ -1418,10 +1451,8 @@ fn init_cuda_once() -> bool {
     static INIT: std::sync::Once = std::sync::Once::new();
     static mut SUCCESS: bool = false;
 
-    INIT.call_once(|| {
-        unsafe {
-            SUCCESS = cudarse_driver::init_cuda_and_primary_ctx().is_ok();
-        }
+    INIT.call_once(|| unsafe {
+        SUCCESS = cudarse_driver::init_cuda_and_primary_ctx().is_ok();
     });
 
     unsafe { SUCCESS }
@@ -1470,8 +1501,12 @@ impl GpuSsim2Context {
         // Verify buffer sizes match
         let expected = self.tmp_ref.width() as usize * self.tmp_ref.height() as usize * 3;
         if reference.len() != expected || distorted.len() != expected {
-            eprintln!("GPU SSIM2: size mismatch: ref={}, dis={}, expected={}",
-                reference.len(), distorted.len(), expected);
+            eprintln!(
+                "GPU SSIM2: size mismatch: ref={}, dis={}, expected={}",
+                reference.len(),
+                distorted.len(),
+                expected
+            );
             return 0.0;
         }
 
@@ -1483,7 +1518,7 @@ impl GpuSsim2Context {
             &mut self.tmp_dis,
             &mut self.ref_linear,
             &mut self.dis_linear,
-            &self.stream
+            &self.stream,
         ) {
             Ok(score) => score,
             Err(e) => {
@@ -1546,23 +1581,36 @@ impl GpuDssimContext {
         // Verify buffer sizes match
         let expected = self.tmp_ref.width() as usize * self.tmp_ref.height() as usize * 3;
         if reference.len() != expected || distorted.len() != expected {
-            eprintln!("GPU DSSIM: size mismatch: ref={}, dis={}, expected={}",
-                reference.len(), distorted.len(), expected);
+            eprintln!(
+                "GPU DSSIM: size mismatch: ref={}, dis={}, expected={}",
+                reference.len(),
+                distorted.len(),
+                expected
+            );
             return 0.0;
         }
 
         // Upload images to GPU
-        if let Err(e) = self.tmp_ref.copy_from_cpu(reference, self.stream.inner() as _) {
+        if let Err(e) = self
+            .tmp_ref
+            .copy_from_cpu(reference, self.stream.inner() as _)
+        {
             eprintln!("GPU DSSIM: failed to upload reference: {:?}", e);
             return 0.0;
         }
-        if let Err(e) = self.tmp_dis.copy_from_cpu(distorted, self.stream.inner() as _) {
+        if let Err(e) = self
+            .tmp_dis
+            .copy_from_cpu(distorted, self.stream.inner() as _)
+        {
             eprintln!("GPU DSSIM: failed to upload distorted: {:?}", e);
             return 0.0;
         }
 
         // Compute DSSIM
-        match self.dssim.compute_sync(&self.tmp_ref, &self.tmp_dis, &self.stream) {
+        match self
+            .dssim
+            .compute_sync(&self.tmp_ref, &self.tmp_dis, &self.stream)
+        {
             Ok(score) => score,
             Err(e) => {
                 eprintln!("GPU DSSIM compute error: {:?}", e);
@@ -1614,8 +1662,12 @@ impl GpuButteraugliContext {
         // Verify buffer sizes match
         let expected = self.tmp_ref.width() as usize * self.tmp_ref.height() as usize * 3;
         if reference.len() != expected || distorted.len() != expected {
-            eprintln!("GPU Butteraugli: size mismatch: ref={}, dis={}, expected={}",
-                reference.len(), distorted.len(), expected);
+            eprintln!(
+                "GPU Butteraugli: size mismatch: ref={}, dis={}, expected={}",
+                reference.len(),
+                distorted.len(),
+                expected
+            );
             return f32::MAX;
         }
 
@@ -1637,7 +1689,10 @@ impl GpuButteraugliContext {
         }
 
         // Compute Butteraugli
-        match self.butteraugli.compute(self.tmp_ref.full_view(), self.tmp_dis.full_view()) {
+        match self
+            .butteraugli
+            .compute(self.tmp_ref.full_view(), self.tmp_dis.full_view())
+        {
             Ok(score) => score,
             Err(e) => {
                 eprintln!("GPU Butteraugli compute error: {:?}", e);
@@ -1701,7 +1756,12 @@ impl ImageProcessor {
     /// but pays off when comparing against many distorted versions.
     ///
     /// If `use_gpu` is true and the GPU feature is enabled, SSIM2 will use GPU acceleration.
-    fn new(rgb_pixels: Vec<u8>, width: usize, height: usize, use_gpu: bool) -> Result<Self, String> {
+    fn new(
+        rgb_pixels: Vec<u8>,
+        width: usize,
+        height: usize,
+        use_gpu: bool,
+    ) -> Result<Self, String> {
         // Convert to array format for SSIM2
         let rgb_array: Vec<[u8; 3]> = rgb_pixels
             .chunks_exact(3)
@@ -1710,12 +1770,9 @@ impl ImageProcessor {
 
         // Create butteraugli reference (precomputes XYB + frequency decomposition)
         // ButteraugliReference::new takes &[u8] and copies internally
-        let butteraugli_ref = ButteraugliReference::new(
-            &rgb_pixels,
-            width,
-            height,
-            ButteraugliParams::default(),
-        ).map_err(|e| format!("Failed to create butteraugli reference: {}", e))?;
+        let butteraugli_ref =
+            ButteraugliReference::new(&rgb_pixels, width, height, ButteraugliParams::default())
+                .map_err(|e| format!("Failed to create butteraugli reference: {}", e))?;
 
         // Create SSIM2 reference (precomputes linear RGB conversion)
         // Ssimulacra2Reference::new takes Img<&[[u8;3]]> and copies internally
@@ -1737,7 +1794,10 @@ impl ImageProcessor {
                     Some(Mutex::new(ctx))
                 }
                 Err(e) => {
-                    eprintln!("Warning: Failed to create GPU SSIM2 context: {}. Falling back to CPU.", e);
+                    eprintln!(
+                        "Warning: Failed to create GPU SSIM2 context: {}. Falling back to CPU.",
+                        e
+                    );
                     None
                 }
             }
@@ -1754,7 +1814,10 @@ impl ImageProcessor {
                     Some(Mutex::new(ctx))
                 }
                 Err(e) => {
-                    eprintln!("Warning: Failed to create GPU DSSIM context: {}. Falling back to CPU.", e);
+                    eprintln!(
+                        "Warning: Failed to create GPU DSSIM context: {}. Falling back to CPU.",
+                        e
+                    );
                     None
                 }
             }
@@ -1764,7 +1827,10 @@ impl ImageProcessor {
 
         #[cfg(feature = "gpu")]
         let gpu_butteraugli = if use_gpu {
-            eprintln!("  Creating GPU Butteraugli context for {}x{}...", width, height);
+            eprintln!(
+                "  Creating GPU Butteraugli context for {}x{}...",
+                width, height
+            );
             match GpuButteraugliContext::new(width as u32, height as u32) {
                 Ok(ctx) => {
                     eprintln!("  GPU Butteraugli context created successfully");
@@ -1780,11 +1846,7 @@ impl ImageProcessor {
         };
 
         #[cfg(feature = "gpu")]
-        let gpu_stream = if use_gpu {
-            CuStream::new().ok()
-        } else {
-            None
-        };
+        let gpu_stream = if use_gpu { CuStream::new().ok() } else { None };
 
         #[cfg(not(feature = "gpu"))]
         if use_gpu {
@@ -1852,7 +1914,8 @@ impl ImageProcessor {
         #[cfg(feature = "gpu")]
         let should_verify = {
             let count = self.verification_counter.fetch_add(1, Ordering::Relaxed);
-            (use_gpu_ssim2 || use_gpu_dssim || use_gpu_butteraugli) && (count % GPU_VERIFY_INTERVAL == 0)
+            (use_gpu_ssim2 || use_gpu_dssim || use_gpu_butteraugli)
+                && (count % GPU_VERIFY_INTERVAL == 0)
         };
 
         // Calculate SSIM2 - either on GPU or CPU
@@ -1860,7 +1923,12 @@ impl ImageProcessor {
             #[cfg(feature = "gpu")]
             {
                 let start = Instant::now();
-                let result = self.gpu_ssim2.as_ref().unwrap().lock().unwrap()
+                let result = self
+                    .gpu_ssim2
+                    .as_ref()
+                    .unwrap()
+                    .lock()
+                    .unwrap()
                     .compute(&self.rgb_pixels, decoded_slice) as f32;
                 (result, start.elapsed().as_millis() as u64)
             }
@@ -1870,7 +1938,9 @@ impl ImageProcessor {
             let start = Instant::now();
             let test_arr = rgb8_to_array(decoded_slice);
             let test_img = Img::new(test_arr.as_slice(), self.width, self.height);
-            let result = self.ssim2_ref.compare(test_img)
+            let result = self
+                .ssim2_ref
+                .compare(test_img)
                 .map(|s| s as f32)
                 .unwrap_or(0.0);
             (result, start.elapsed().as_millis() as u64)
@@ -1881,7 +1951,12 @@ impl ImageProcessor {
             #[cfg(feature = "gpu")]
             {
                 let start = Instant::now();
-                let result = self.gpu_dssim.as_ref().unwrap().lock().unwrap()
+                let result = self
+                    .gpu_dssim
+                    .as_ref()
+                    .unwrap()
+                    .lock()
+                    .unwrap()
                     .compute(&self.rgb_pixels, decoded_slice) as f32;
                 (result, start.elapsed().as_millis() as u64)
             }
@@ -1901,8 +1976,16 @@ impl ImageProcessor {
             #[cfg(feature = "gpu")]
             {
                 let start = Instant::now();
-                let stream = self.gpu_stream.as_ref().expect("GPU stream required for butteraugli");
-                let result = self.gpu_butteraugli.as_ref().unwrap().lock().unwrap()
+                let stream = self
+                    .gpu_stream
+                    .as_ref()
+                    .expect("GPU stream required for butteraugli");
+                let result = self
+                    .gpu_butteraugli
+                    .as_ref()
+                    .unwrap()
+                    .lock()
+                    .unwrap()
                     .compute(&self.rgb_pixels, decoded_slice, stream);
                 (result, start.elapsed().as_millis() as u64)
             }
@@ -1910,7 +1993,9 @@ impl ImageProcessor {
             unreachable!()
         } else {
             let start = Instant::now();
-            let result = self.butteraugli_ref.compare(decoded_slice)
+            let result = self
+                .butteraugli_ref
+                .compare(decoded_slice)
                 .map(|r| r.score as f32)
                 .unwrap_or(f32::MAX);
             (result, start.elapsed().as_millis() as u64)
@@ -1919,8 +2004,15 @@ impl ImageProcessor {
         // GPU verification: compare GPU results against CPU every N tests
         #[cfg(feature = "gpu")]
         if should_verify {
-            self.verify_gpu_accuracy(decoded_slice, ssimulacra2, dssim, butteraugli,
-                                     use_gpu_ssim2, use_gpu_dssim, use_gpu_butteraugli);
+            self.verify_gpu_accuracy(
+                decoded_slice,
+                ssimulacra2,
+                dssim,
+                butteraugli,
+                use_gpu_ssim2,
+                use_gpu_dssim,
+                use_gpu_butteraugli,
+            );
         }
 
         MetricResults {
@@ -1935,15 +2027,25 @@ impl ImageProcessor {
 
     /// Verify GPU results against CPU computation
     #[cfg(feature = "gpu")]
-    fn verify_gpu_accuracy(&self, decoded_slice: &[u8], gpu_ssim2: f32, gpu_dssim: f32, gpu_butteraugli: f32,
-                           used_gpu_ssim2: bool, used_gpu_dssim: bool, used_gpu_butteraugli: bool) {
+    fn verify_gpu_accuracy(
+        &self,
+        decoded_slice: &[u8],
+        gpu_ssim2: f32,
+        gpu_dssim: f32,
+        gpu_butteraugli: f32,
+        used_gpu_ssim2: bool,
+        used_gpu_dssim: bool,
+        used_gpu_butteraugli: bool,
+    ) {
         let count = self.verification_counter.load(Ordering::Relaxed);
 
         // Verify SSIM2
         if used_gpu_ssim2 {
             let test_arr = rgb8_to_array(decoded_slice);
             let test_img = Img::new(test_arr.as_slice(), self.width, self.height);
-            let cpu_ssim2 = self.ssim2_ref.compare(test_img)
+            let cpu_ssim2 = self
+                .ssim2_ref
+                .compare(test_img)
                 .map(|s| s as f32)
                 .unwrap_or(0.0);
 
@@ -1965,12 +2067,22 @@ impl ImageProcessor {
 
             if !is_valid {
                 eprintln!("\n🚨🚨🚨 GPU SSIM2 DIVERGENCE DETECTED! 🚨🚨🚨");
-                eprintln!("   Test #{}: GPU={:.6} CPU={:.6} Error={:.3}% abs={:.4} (max={:.1}%/{:.2}abs)",
-                         count, gpu_ssim2, cpu_ssim2, error_pct, abs_diff, GPU_SSIM2_EPSILON_PCT, GPU_SSIM2_EPSILON_ABS);
+                eprintln!(
+                    "   Test #{}: GPU={:.6} CPU={:.6} Error={:.3}% abs={:.4} (max={:.1}%/{:.2}abs)",
+                    count,
+                    gpu_ssim2,
+                    cpu_ssim2,
+                    error_pct,
+                    abs_diff,
+                    GPU_SSIM2_EPSILON_PCT,
+                    GPU_SSIM2_EPSILON_ABS
+                );
                 eprintln!("   ⚠️  Results may be unreliable! Consider using --no-gpu\n");
             } else {
-                eprintln!("✅ GPU SSIM2 verified #{}: GPU={:.4} CPU={:.4} err={:.4}%",
-                         count, gpu_ssim2, cpu_ssim2, error_pct);
+                eprintln!(
+                    "✅ GPU SSIM2 verified #{}: GPU={:.4} CPU={:.4} err={:.4}%",
+                    count, gpu_ssim2, cpu_ssim2, error_pct
+                );
             }
         }
 
@@ -1989,18 +2101,24 @@ impl ImageProcessor {
 
             if error_pct > GPU_DSSIM_EPSILON_PCT as f32 {
                 eprintln!("\n🚨🚨🚨 GPU DSSIM DIVERGENCE DETECTED! 🚨🚨🚨");
-                eprintln!("   Test #{}: GPU={:.6} CPU={:.6} Error={:.3}% (max={:.1}%)",
-                         count, gpu_dssim, cpu_dssim, error_pct, GPU_DSSIM_EPSILON_PCT);
+                eprintln!(
+                    "   Test #{}: GPU={:.6} CPU={:.6} Error={:.3}% (max={:.1}%)",
+                    count, gpu_dssim, cpu_dssim, error_pct, GPU_DSSIM_EPSILON_PCT
+                );
                 eprintln!("   ⚠️  Results may be unreliable! Consider using --no-gpu\n");
             } else {
-                eprintln!("✅ GPU DSSIM verified #{}: GPU={:.6} CPU={:.6} err={:.4}%",
-                         count, gpu_dssim, cpu_dssim, error_pct);
+                eprintln!(
+                    "✅ GPU DSSIM verified #{}: GPU={:.6} CPU={:.6} err={:.4}%",
+                    count, gpu_dssim, cpu_dssim, error_pct
+                );
             }
         }
 
         // Verify Butteraugli
         if used_gpu_butteraugli {
-            let cpu_butteraugli = self.butteraugli_ref.compare(decoded_slice)
+            let cpu_butteraugli = self
+                .butteraugli_ref
+                .compare(decoded_slice)
                 .map(|r| r.score as f32)
                 .unwrap_or(f32::MAX);
 
@@ -2012,12 +2130,16 @@ impl ImageProcessor {
 
             if error_pct > GPU_BUTTERAUGLI_EPSILON_PCT as f32 {
                 eprintln!("\n🚨🚨🚨 GPU BUTTERAUGLI DIVERGENCE DETECTED! 🚨🚨🚨");
-                eprintln!("   Test #{}: GPU={:.4} CPU={:.4} Error={:.3}% (max={:.1}%)",
-                         count, gpu_butteraugli, cpu_butteraugli, error_pct, GPU_BUTTERAUGLI_EPSILON_PCT);
+                eprintln!(
+                    "   Test #{}: GPU={:.4} CPU={:.4} Error={:.3}% (max={:.1}%)",
+                    count, gpu_butteraugli, cpu_butteraugli, error_pct, GPU_BUTTERAUGLI_EPSILON_PCT
+                );
                 eprintln!("   ⚠️  Results may be unreliable! Consider using --no-gpu\n");
             } else {
-                eprintln!("✅ GPU Butteraugli verified #{}: GPU={:.4} CPU={:.4} err={:.2}%",
-                         count, gpu_butteraugli, cpu_butteraugli, error_pct);
+                eprintln!(
+                    "✅ GPU Butteraugli verified #{}: GPU={:.4} CPU={:.4} err={:.2}%",
+                    count, gpu_butteraugli, cpu_butteraugli, error_pct
+                );
             }
         }
     }
@@ -2090,7 +2212,10 @@ fn process_work_item_with_processor(
     );
     let cached = fs::read_dir(&item.image_dir).ok().and_then(|entries| {
         entries.filter_map(|e| e.ok()).find(|e| {
-            e.file_name().to_str().map(|s| s == cache_filename).unwrap_or(false)
+            e.file_name()
+                .to_str()
+                .map(|s| s == cache_filename)
+                .unwrap_or(false)
         })
     });
 
@@ -2107,16 +2232,14 @@ fn process_work_item_with_processor(
     // Encode
     let encode_start = Instant::now();
     let encode_result = match item.config {
-        Config::MozJpeg { subsampling } | Config::MozJpegMax { subsampling } => {
-            encode_mozjpeg(
-                &processor.rgb_pixels,
-                processor.width,
-                processor.height,
-                item.quality,
-                subsampling,
-                matches!(item.config, Config::MozJpegMax { .. }),
-            )
-        }
+        Config::MozJpeg { subsampling } | Config::MozJpegMax { subsampling } => encode_mozjpeg(
+            &processor.rgb_pixels,
+            processor.width,
+            processor.height,
+            item.quality,
+            subsampling,
+            matches!(item.config, Config::MozJpegMax { .. }),
+        ),
         Config::CMozJpeg { subsampling } | Config::CMozJpegMax { subsampling } => encode_cmozjpeg(
             &processor.rgb_pixels,
             processor.width,
@@ -2179,7 +2302,9 @@ fn process_work_item_with_processor(
     };
     let encode_ms = encode_start.elapsed().as_millis() as u64;
     stats.encodings_performed.fetch_add(1, Ordering::Relaxed);
-    stats.total_encode_time_ms.fetch_add(encode_ms, Ordering::Relaxed);
+    stats
+        .total_encode_time_ms
+        .fetch_add(encode_ms, Ordering::Relaxed);
 
     // Decode
     let decode_start = Instant::now();
@@ -2200,15 +2325,23 @@ fn process_work_item_with_processor(
         }
     };
     let decode_ms = decode_start.elapsed().as_millis() as u64;
-    stats.total_decode_ms.fetch_add(decode_ms, Ordering::Relaxed);
+    stats
+        .total_decode_ms
+        .fetch_add(decode_ms, Ordering::Relaxed);
 
     // Measure metrics using the cached processor
     let metric_results = processor.measure(&decoded);
 
     // Accumulate per-metric timing
-    stats.total_butteraugli_ms.fetch_add(metric_results.butteraugli_ms, Ordering::Relaxed);
-    stats.total_ssim2_ms.fetch_add(metric_results.ssim2_ms, Ordering::Relaxed);
-    stats.total_dssim_ms.fetch_add(metric_results.dssim_ms, Ordering::Relaxed);
+    stats
+        .total_butteraugli_ms
+        .fetch_add(metric_results.butteraugli_ms, Ordering::Relaxed);
+    stats
+        .total_ssim2_ms
+        .fetch_add(metric_results.ssim2_ms, Ordering::Relaxed);
+    stats
+        .total_dssim_ms
+        .fetch_add(metric_results.dssim_ms, Ordering::Relaxed);
     stats.total_metric_time_ms.fetch_add(
         metric_results.butteraugli_ms + metric_results.ssim2_ms + metric_results.dssim_ms,
         Ordering::Relaxed,
@@ -2260,7 +2393,10 @@ fn process_work_item_with_processor(
             analysis: Arc::clone(analysis),
             metrics: None,
             cached: false,
-            error: Some(format!("{} q{}: write error: {}", config_key, item.quality, e)),
+            error: Some(format!(
+                "{} q{}: write error: {}",
+                config_key, item.quality, e
+            )),
         };
     }
 
@@ -2271,7 +2407,10 @@ fn process_work_item_with_processor(
                 analysis: Arc::clone(analysis),
                 metrics: None,
                 cached: false,
-                error: Some(format!("{} q{}: serialize error: {}", config_key, item.quality, e)),
+                error: Some(format!(
+                    "{} q{}: serialize error: {}",
+                    config_key, item.quality, e
+                )),
             };
         }
     };
@@ -2281,7 +2420,10 @@ fn process_work_item_with_processor(
             analysis: Arc::clone(analysis),
             metrics: None,
             cached: false,
-            error: Some(format!("{} q{}: json write error: {}", config_key, item.quality, e)),
+            error: Some(format!(
+                "{} q{}: json write error: {}",
+                config_key, item.quality, e
+            )),
         };
     }
 
@@ -2327,14 +2469,27 @@ fn encode_work_item_phase1(
 
     // Check if final encoding already exists
     if !force {
-        if find_final_encoding(&item.image_dir, &config_key, item.quality, item.cache_version, ext).is_some() {
+        if find_final_encoding(
+            &item.image_dir,
+            &config_key,
+            item.quality,
+            item.cache_version,
+            ext,
+        )
+        .is_some()
+        {
             stats.encodings_cached.fetch_add(1, Ordering::Relaxed);
             return EncodePhaseResult::AlreadyComplete;
         }
     }
 
     // Check if staged file already exists
-    let staged_path = item.image_dir.join(format_staged_filename(&config_key, item.quality, item.cache_version, ext));
+    let staged_path = item.image_dir.join(format_staged_filename(
+        &config_key,
+        item.quality,
+        item.cache_version,
+        ext,
+    ));
     if staged_path.exists() && !force {
         return EncodePhaseResult::Staged(staged_path);
     }
@@ -2342,16 +2497,14 @@ fn encode_work_item_phase1(
     // Encode
     let encode_start = Instant::now();
     let encode_result = match item.config {
-        Config::MozJpeg { subsampling } | Config::MozJpegMax { subsampling } => {
-            encode_mozjpeg(
-                &item.rgb_pixels,
-                item.width,
-                item.height,
-                item.quality,
-                subsampling,
-                matches!(item.config, Config::MozJpegMax { .. }),
-            )
-        }
+        Config::MozJpeg { subsampling } | Config::MozJpegMax { subsampling } => encode_mozjpeg(
+            &item.rgb_pixels,
+            item.width,
+            item.height,
+            item.quality,
+            subsampling,
+            matches!(item.config, Config::MozJpegMax { .. }),
+        ),
         Config::CMozJpeg { subsampling } | Config::CMozJpegMax { subsampling } => encode_cmozjpeg(
             &item.rgb_pixels,
             item.width,
@@ -2403,7 +2556,9 @@ fn encode_work_item_phase1(
     };
 
     let encode_ms = encode_start.elapsed().as_millis() as u64;
-    stats.total_encode_time_ms.fetch_add(encode_ms, Ordering::Relaxed);
+    stats
+        .total_encode_time_ms
+        .fetch_add(encode_ms, Ordering::Relaxed);
 
     // Write staged file
     if let Err(e) = atomic_write(&staged_path, &jpeg_data) {
@@ -2420,131 +2575,158 @@ fn process_staged_items_phase2(
     processor: &ImageProcessor,
     stats: &AtomicRunStats,
 ) -> Vec<WorkResult> {
-    items.iter().map(|(item, staged_path)| {
-        let config_key = item.config.key();
-        let ext = config_extension(&item.config);
+    items
+        .iter()
+        .map(|(item, staged_path)| {
+            let config_key = item.config.key();
+            let ext = config_extension(&item.config);
 
-        // Read and decode the staged JPEG
-        let jpeg_data = match fs::read(staged_path) {
-            Ok(data) => data,
-            Err(e) => {
-                return WorkResult {
-                    analysis: Arc::clone(&item.analysis),
-                    metrics: None,
-                    cached: false,
-                    error: Some(format!("{} q{}: read staged error: {}", config_key, item.quality, e)),
-                };
-            }
-        };
-
-        let decode_start = Instant::now();
-        let decoded = match decode_encoded(&item.config, &jpeg_data) {
-            Ok(d) => d,
-            Err(e) => {
-                return WorkResult {
-                    analysis: Arc::clone(&item.analysis),
-                    metrics: None,
-                    cached: false,
-                    error: Some(format!("{} q{}: decode error: {}", config_key, item.quality, e)),
-                };
-            }
-        };
-        let decode_ms = decode_start.elapsed().as_millis() as u64;
-        stats.total_decode_ms.fetch_add(decode_ms, Ordering::Relaxed);
-
-        // Measure metrics using GPU processor
-        let metric_results = processor.measure(&decoded);
-
-        stats.total_butteraugli_ms.fetch_add(metric_results.butteraugli_ms, Ordering::Relaxed);
-        stats.total_ssim2_ms.fetch_add(metric_results.ssim2_ms, Ordering::Relaxed);
-        stats.total_dssim_ms.fetch_add(metric_results.dssim_ms, Ordering::Relaxed);
-        stats.total_metric_time_ms.fetch_add(
-            metric_results.butteraugli_ms + metric_results.ssim2_ms + metric_results.dssim_ms,
-            Ordering::Relaxed,
-        );
-
-        let size_bytes = jpeg_data.len();
-        let bpp = (size_bytes as f32 * 8.0) / (processor.width * processor.height) as f32;
-        let butteraugli = metric_results.butteraugli;
-        let ssimulacra2 = metric_results.ssimulacra2;
-        let dssim = metric_results.dssim;
-
-        // Create metrics struct
-        let metrics = EncodingMetrics {
-            source_hash: item.analysis.source_hash.clone(),
-            config_key: config_key.to_string(),
-            quality: item.quality,
-            cache_version: item.cache_version,
-            size_bytes,
-            bpp,
-            butteraugli,
-            ssimulacra2,
-            dssim,
-            encode_time_ms: 0, // Already counted in phase 1
-            timestamp: Utc::now(),
-        };
-
-        // Write final files with metric-based names
-        let jpg_name = format_encoding_filename(
-            bpp,
-            ssimulacra2,
-            butteraugli,
-            &config_key,
-            item.quality,
-            item.cache_version,
-            ext,
-        );
-        let json_name = format_metrics_filename(
-            bpp,
-            ssimulacra2,
-            butteraugli,
-            &config_key,
-            item.quality,
-            item.cache_version,
-        );
-
-        if let Err(e) = atomic_write(&item.image_dir.join(&jpg_name), &jpeg_data) {
-            return WorkResult {
-                analysis: Arc::clone(&item.analysis),
-                metrics: None,
-                cached: false,
-                error: Some(format!("{} q{}: final write error: {}", config_key, item.quality, e)),
+            // Read and decode the staged JPEG
+            let jpeg_data = match fs::read(staged_path) {
+                Ok(data) => data,
+                Err(e) => {
+                    return WorkResult {
+                        analysis: Arc::clone(&item.analysis),
+                        metrics: None,
+                        cached: false,
+                        error: Some(format!(
+                            "{} q{}: read staged error: {}",
+                            config_key, item.quality, e
+                        )),
+                    };
+                }
             };
-        }
 
-        let metrics_json = match serde_json::to_string_pretty(&metrics) {
-            Ok(j) => j,
-            Err(e) => {
+            let decode_start = Instant::now();
+            let decoded = match decode_encoded(&item.config, &jpeg_data) {
+                Ok(d) => d,
+                Err(e) => {
+                    return WorkResult {
+                        analysis: Arc::clone(&item.analysis),
+                        metrics: None,
+                        cached: false,
+                        error: Some(format!(
+                            "{} q{}: decode error: {}",
+                            config_key, item.quality, e
+                        )),
+                    };
+                }
+            };
+            let decode_ms = decode_start.elapsed().as_millis() as u64;
+            stats
+                .total_decode_ms
+                .fetch_add(decode_ms, Ordering::Relaxed);
+
+            // Measure metrics using GPU processor
+            let metric_results = processor.measure(&decoded);
+
+            stats
+                .total_butteraugli_ms
+                .fetch_add(metric_results.butteraugli_ms, Ordering::Relaxed);
+            stats
+                .total_ssim2_ms
+                .fetch_add(metric_results.ssim2_ms, Ordering::Relaxed);
+            stats
+                .total_dssim_ms
+                .fetch_add(metric_results.dssim_ms, Ordering::Relaxed);
+            stats.total_metric_time_ms.fetch_add(
+                metric_results.butteraugli_ms + metric_results.ssim2_ms + metric_results.dssim_ms,
+                Ordering::Relaxed,
+            );
+
+            let size_bytes = jpeg_data.len();
+            let bpp = (size_bytes as f32 * 8.0) / (processor.width * processor.height) as f32;
+            let butteraugli = metric_results.butteraugli;
+            let ssimulacra2 = metric_results.ssimulacra2;
+            let dssim = metric_results.dssim;
+
+            // Create metrics struct
+            let metrics = EncodingMetrics {
+                source_hash: item.analysis.source_hash.clone(),
+                config_key: config_key.to_string(),
+                quality: item.quality,
+                cache_version: item.cache_version,
+                size_bytes,
+                bpp,
+                butteraugli,
+                ssimulacra2,
+                dssim,
+                encode_time_ms: 0, // Already counted in phase 1
+                timestamp: Utc::now(),
+            };
+
+            // Write final files with metric-based names
+            let jpg_name = format_encoding_filename(
+                bpp,
+                ssimulacra2,
+                butteraugli,
+                &config_key,
+                item.quality,
+                item.cache_version,
+                ext,
+            );
+            let json_name = format_metrics_filename(
+                bpp,
+                ssimulacra2,
+                butteraugli,
+                &config_key,
+                item.quality,
+                item.cache_version,
+            );
+
+            if let Err(e) = atomic_write(&item.image_dir.join(&jpg_name), &jpeg_data) {
                 return WorkResult {
                     analysis: Arc::clone(&item.analysis),
                     metrics: None,
                     cached: false,
-                    error: Some(format!("{} q{}: serialize error: {}", config_key, item.quality, e)),
+                    error: Some(format!(
+                        "{} q{}: final write error: {}",
+                        config_key, item.quality, e
+                    )),
                 };
             }
-        };
 
-        if let Err(e) = atomic_write(&item.image_dir.join(&json_name), metrics_json.as_bytes()) {
-            return WorkResult {
-                analysis: Arc::clone(&item.analysis),
-                metrics: None,
-                cached: false,
-                error: Some(format!("{} q{}: json write error: {}", config_key, item.quality, e)),
+            let metrics_json = match serde_json::to_string_pretty(&metrics) {
+                Ok(j) => j,
+                Err(e) => {
+                    return WorkResult {
+                        analysis: Arc::clone(&item.analysis),
+                        metrics: None,
+                        cached: false,
+                        error: Some(format!(
+                            "{} q{}: serialize error: {}",
+                            config_key, item.quality, e
+                        )),
+                    };
+                }
             };
-        }
 
-        // Delete staged file now that we have the final version
-        let _ = fs::remove_file(staged_path);
+            if let Err(e) = atomic_write(&item.image_dir.join(&json_name), metrics_json.as_bytes())
+            {
+                return WorkResult {
+                    analysis: Arc::clone(&item.analysis),
+                    metrics: None,
+                    cached: false,
+                    error: Some(format!(
+                        "{} q{}: json write error: {}",
+                        config_key, item.quality, e
+                    )),
+                };
+            }
 
-        stats.encodings_performed.fetch_add(1, Ordering::Relaxed);
+            // Delete staged file now that we have the final version
+            let _ = fs::remove_file(staged_path);
 
-        WorkResult {
-            analysis: Arc::clone(&item.analysis),
-            metrics: Some(metrics),
-            error: None,
-            cached: false,
-        }
-    }).collect()
+            stats.encodings_performed.fetch_add(1, Ordering::Relaxed);
+
+            WorkResult {
+                analysis: Arc::clone(&item.analysis),
+                metrics: Some(metrics),
+                error: None,
+                cached: false,
+            }
+        })
+        .collect()
 }
 
 /// Two-phase processing for a single source image (GPU mode).
@@ -2624,12 +2806,7 @@ fn process_image_two_phase(
 /// Measure all metrics for a decoded image (non-cached version).
 /// Kept for reference - prefer ImageProcessor::measure() for cached version.
 #[allow(dead_code)]
-fn measure_metrics(
-    original: &[u8],
-    decoded: &[u8],
-    width: usize,
-    height: usize,
-) -> MetricResults {
+fn measure_metrics(original: &[u8], decoded: &[u8], width: usize, height: usize) -> MetricResults {
     let expected_size = width * height * 3;
 
     if decoded.len() < expected_size {
@@ -3495,7 +3672,7 @@ struct AggregateConfigMap {
 /// Complete aggregate mapping for a corpus
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct CorpusQualityMap {
-    /// Corpus name (e.g., "kodak", "clic2025")
+    /// Corpus name (e.g., "cid22", "clic2025")
     corpus_name: String,
     /// Number of images in corpus
     image_count: usize,
@@ -3556,10 +3733,7 @@ fn generate_image_quality_maps(rows: &[CsvRow]) -> Vec<ImageQualityMap> {
                 }
 
                 // Pick the one with smallest file size
-                if let Some(best) = meeting_target
-                    .iter()
-                    .min_by_key(|r| r.size_bytes)
-                {
+                if let Some(best) = meeting_target.iter().min_by_key(|r| r.size_bytes) {
                     ssim2_to_quality.insert(
                         target,
                         QualityMapEntry {
@@ -3722,7 +3896,8 @@ fn save_image_quality_maps(
     output_dir: &Path,
 ) -> Result<(), String> {
     let maps_dir = output_dir.join("quality_maps");
-    fs::create_dir_all(&maps_dir).map_err(|e| format!("Failed to create quality_maps dir: {}", e))?;
+    fs::create_dir_all(&maps_dir)
+        .map_err(|e| format!("Failed to create quality_maps dir: {}", e))?;
 
     for img_map in image_maps {
         // Use source name (without extension) as filename
@@ -3737,7 +3912,11 @@ fn save_image_quality_maps(
         atomic_write(&path, json.as_bytes())?;
     }
 
-    println!("Saved {} per-image quality maps to {:?}", image_maps.len(), maps_dir);
+    println!(
+        "Saved {} per-image quality maps to {:?}",
+        image_maps.len(),
+        maps_dir
+    );
     Ok(())
 }
 
@@ -3746,7 +3925,10 @@ fn save_aggregate_quality_map(
     aggregate: &CorpusQualityMap,
     output_dir: &Path,
 ) -> Result<(), String> {
-    let path = output_dir.join(format!("{}_aggregate_quality_map.json", aggregate.corpus_name));
+    let path = output_dir.join(format!(
+        "{}_aggregate_quality_map.json",
+        aggregate.corpus_name
+    ));
     let json = serde_json::to_string_pretty(aggregate)
         .map_err(|e| format!("Failed to serialize aggregate map: {}", e))?;
     atomic_write(&path, json.as_bytes())?;
@@ -3756,8 +3938,13 @@ fn save_aggregate_quality_map(
 
 /// Print aggregate quality map summary to console
 fn print_aggregate_quality_summary(aggregate: &CorpusQualityMap) {
-    println!("\n{:=^80}", format!(" SSIM2→QUALITY MAP: {} ({} images) ",
-                                  aggregate.corpus_name, aggregate.image_count));
+    println!(
+        "\n{:=^80}",
+        format!(
+            " SSIM2→QUALITY MAP: {} ({} images) ",
+            aggregate.corpus_name, aggregate.image_count
+        )
+    );
 
     // Print header
     print!("{:>12}", "Config");
@@ -3937,7 +4124,9 @@ fn process_work_item(item: &WorkItem, stats: &AtomicRunStats, args: &Args) -> Wo
         }
     };
     let decode_ms = decode_start.elapsed().as_millis() as u64;
-    stats.total_decode_ms.fetch_add(decode_ms, Ordering::Relaxed);
+    stats
+        .total_decode_ms
+        .fetch_add(decode_ms, Ordering::Relaxed);
 
     let metric_start = Instant::now();
     let metric_results = measure_metrics(&item.rgb_pixels, &decoded, item.width, item.height);
@@ -3946,9 +4135,15 @@ fn process_work_item(item: &WorkItem, stats: &AtomicRunStats, args: &Args) -> Wo
     let dssim = metric_results.dssim;
 
     // Accumulate per-metric timing
-    stats.total_butteraugli_ms.fetch_add(metric_results.butteraugli_ms, Ordering::Relaxed);
-    stats.total_ssim2_ms.fetch_add(metric_results.ssim2_ms, Ordering::Relaxed);
-    stats.total_dssim_ms.fetch_add(metric_results.dssim_ms, Ordering::Relaxed);
+    stats
+        .total_butteraugli_ms
+        .fetch_add(metric_results.butteraugli_ms, Ordering::Relaxed);
+    stats
+        .total_ssim2_ms
+        .fetch_add(metric_results.ssim2_ms, Ordering::Relaxed);
+    stats
+        .total_dssim_ms
+        .fetch_add(metric_results.dssim_ms, Ordering::Relaxed);
     stats
         .total_metric_time_ms
         .fetch_add(metric_start.elapsed().as_millis() as u64, Ordering::Relaxed);
@@ -4133,8 +4328,8 @@ fn verify_single_encoding(
     cached_jpeg_path: &Path,
 ) -> Result<VerifyResult, String> {
     // Read the cached JPEG
-    let cached_data = fs::read(cached_jpeg_path)
-        .map_err(|e| format!("Failed to read cached JPEG: {}", e))?;
+    let cached_data =
+        fs::read(cached_jpeg_path).map_err(|e| format!("Failed to read cached JPEG: {}", e))?;
 
     // Re-encode with current codec
     let new_data = config.encode(rgb_pixels, width, height, quality)?;
@@ -4173,12 +4368,7 @@ fn run_quick_verify(
 
     let image_dirs: Vec<_> = fs::read_dir(&images_dir)
         .ok()
-        .map(|entries| {
-            entries
-                .flatten()
-                .filter(|e| e.path().is_dir())
-                .collect()
-        })
+        .map(|entries| entries.flatten().filter(|e| e.path().is_dir()).collect())
         .unwrap_or_default();
 
     if image_dirs.is_empty() {
@@ -4223,13 +4413,11 @@ fn run_quick_verify(
         for &quality in &quality_levels {
             // Find cached JPEG for this config/quality
             let pattern = format!("{}-q{}_v{}.jpg", key, quality, cache_entry.version);
-            let cached_jpeg = fs::read_dir(&image_dir)
-                .ok()
-                .and_then(|entries| {
-                    entries
-                        .flatten()
-                        .find(|e| e.file_name().to_string_lossy().ends_with(&pattern))
-                });
+            let cached_jpeg = fs::read_dir(&image_dir).ok().and_then(|entries| {
+                entries
+                    .flatten()
+                    .find(|e| e.file_name().to_string_lossy().ends_with(&pattern))
+            });
 
             if let Some(entry) = cached_jpeg {
                 checked += 1;
@@ -4480,13 +4668,17 @@ fn run_batch_worker(args: &Args) {
             .expect("BATCH_TASK_INDEX env var or --task-index required in batch mode")
     });
 
-    let num_configs = args.num_configs.unwrap_or_else(|| {
-        Config::test_subset().len()
-    });
+    let num_configs = args
+        .num_configs
+        .unwrap_or_else(|| Config::test_subset().len());
 
-    let gcs_source = args.gcs_source.as_ref()
+    let gcs_source = args
+        .gcs_source
+        .as_ref()
         .expect("--gcs-source required in batch mode");
-    let gcs_output = args.gcs_output.as_ref()
+    let gcs_output = args
+        .gcs_output
+        .as_ref()
         .expect("--gcs-output required in batch mode");
 
     // Decode task index into image/config indices
@@ -4515,9 +4707,13 @@ fn run_batch_worker(args: &Args) {
 /// Orchestrate a GCP Batch job submission
 fn run_gcp_batch_orchestration(args: &Args) {
     let project = args.gcp_project.as_ref().unwrap();
-    let bucket = args.gcp_bucket.as_ref()
+    let bucket = args
+        .gcp_bucket
+        .as_ref()
         .expect("--gcp-bucket required with --gcp-project");
-    let container = args.container_image.as_ref()
+    let container = args
+        .container_image
+        .as_ref()
         .expect("--container-image required with --gcp-project");
 
     println!("GCP Batch orchestration mode:");
@@ -4557,8 +4753,14 @@ fn run_gcp_batch_orchestration(args: &Args) {
     eprintln!("  1. google-cloud-storage crate for GCS uploads");
     eprintln!("  2. GCP Batch API client (or gcloud CLI)");
     eprintln!("\nFor now, you can manually:");
-    eprintln!("  1. Upload images: gsutil -m cp -r {} gs://{}/discover/sources/",
-              args.corpus.first().map(|p| p.display().to_string()).unwrap_or_default(), bucket);
+    eprintln!(
+        "  1. Upload images: gsutil -m cp -r {} gs://{}/discover/sources/",
+        args.corpus
+            .first()
+            .map(|p| p.display().to_string())
+            .unwrap_or_default(),
+        bucket
+    );
     eprintln!("  2. Submit batch job using gcloud batch jobs submit");
     std::process::exit(1);
 }
@@ -4665,7 +4867,11 @@ fn main() {
     if let Some(max) = args.max_images {
         images.truncate(max);
     }
-    println!("Total: {} images from {} corpus directories", images.len(), args.corpus.len());
+    println!(
+        "Total: {} images from {} corpus directories",
+        images.len(),
+        args.corpus.len()
+    );
 
     if images.is_empty() {
         eprintln!("No PNG images found!");
@@ -4791,7 +4997,11 @@ fn main() {
         work_by_image.len(),
         total_items,
         total_items / work_by_image.len().max(1),
-        if args.gpu { " [GPU mode - two-phase parallel]" } else { "" }
+        if args.gpu {
+            " [GPU mode - two-phase parallel]"
+        } else {
+            ""
+        }
     );
 
     let args_ref = &args;
@@ -4843,7 +5053,10 @@ fn main() {
         // Phase 1: Parallel encoding across ALL work items
         // Phase 2: Sequential GPU metrics per image
 
-        println!("  Phase 1: Parallel encoding across all {} work items...", total_items);
+        println!(
+            "  Phase 1: Parallel encoding across all {} work items...",
+            total_items
+        );
         let phase1_start = Instant::now();
 
         // Collect all work items for parallel encoding
@@ -4855,20 +5068,29 @@ fn main() {
         // Encode all items in parallel
         let encode_results: Vec<_> = all_items
             .par_iter()
-            .map(|item| (*item, encode_work_item_phase1(item, stats_ref, args_ref.force)))
+            .map(|item| {
+                (
+                    *item,
+                    encode_work_item_phase1(item, stats_ref, args_ref.force),
+                )
+            })
             .collect();
 
         let phase1_time = phase1_start.elapsed();
-        let staged_count = encode_results.iter()
+        let staged_count = encode_results
+            .iter()
             .filter(|(_, r)| matches!(r, EncodePhaseResult::Staged(_)))
             .count();
-        println!("  Phase 1 complete: {} staged, {} cached in {:.1}s",
-                 staged_count,
-                 encode_results.len() - staged_count,
-                 phase1_time.as_secs_f32());
+        println!(
+            "  Phase 1 complete: {} staged, {} cached in {:.1}s",
+            staged_count,
+            encode_results.len() - staged_count,
+            phase1_time.as_secs_f32()
+        );
 
         // Group encode results by image path for phase 2
-        let mut results_by_image: HashMap<PathBuf, Vec<(&WorkItem, EncodePhaseResult)>> = HashMap::new();
+        let mut results_by_image: HashMap<PathBuf, Vec<(&WorkItem, EncodePhaseResult)>> =
+            HashMap::new();
         for (item, result) in encode_results {
             results_by_image
                 .entry(item.image_path.clone())
@@ -4876,7 +5098,10 @@ fn main() {
                 .push((item, result));
         }
 
-        println!("  Phase 2: Sequential GPU metrics for {} images...", results_by_image.len());
+        println!(
+            "  Phase 2: Sequential GPU metrics for {} images...",
+            results_by_image.len()
+        );
         let phase2_start = Instant::now();
 
         // Phase 2: Sequential GPU metrics per image
@@ -4884,9 +5109,12 @@ fn main() {
 
         for (idx, (image_path, item_results)) in results_by_image.iter().enumerate() {
             if args_ref.verbose {
-                eprintln!("  Metrics [{}/{}]: {:?}",
-                         idx + 1, results_by_image.len(),
-                         image_path.file_name().unwrap_or_default());
+                eprintln!(
+                    "  Metrics [{}/{}]: {:?}",
+                    idx + 1,
+                    results_by_image.len(),
+                    image_path.file_name().unwrap_or_default()
+                );
             }
 
             // Separate into completed vs needing metrics
@@ -4924,7 +5152,8 @@ fn main() {
 
                 match ImageProcessor::new(rgb_pixels, first.width, first.height, args_ref.gpu) {
                     Ok(processor) => {
-                        let metric_results = process_staged_items_phase2(&staged_items, &processor, stats_ref);
+                        let metric_results =
+                            process_staged_items_phase2(&staged_items, &processor, stats_ref);
                         image_results.extend(metric_results);
                     }
                     Err(e) => {
@@ -4946,16 +5175,22 @@ fn main() {
         }
 
         let phase2_time = phase2_start.elapsed();
-        println!("  Phase 2 complete: {} results in {:.1}s",
-                 all_results.len(), phase2_time.as_secs_f32());
+        println!(
+            "  Phase 2 complete: {} results in {:.1}s",
+            all_results.len(),
+            phase2_time.as_secs_f32()
+        );
 
         all_results
     } else {
         // CPU mode: parallel processing across images (original behavior)
         let process_one_image = |image_path: &PathBuf, items: &[WorkItem]| -> Vec<WorkResult> {
             if args_ref.verbose {
-                eprintln!("Processing {:?} ({} encodings)",
-                         image_path.file_name().unwrap_or_default(), items.len());
+                eprintln!(
+                    "Processing {:?} ({} encodings)",
+                    image_path.file_name().unwrap_or_default(),
+                    items.len()
+                );
             }
 
             let image_results = process_image_lockstep(items, stats_ref, args_ref);

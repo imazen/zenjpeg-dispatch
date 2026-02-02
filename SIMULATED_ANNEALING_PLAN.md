@@ -75,7 +75,7 @@ Train our own tables using SA, but optimized for:
 ### Phase 1: Evaluation (1-2 days)
 - [ ] Download/extract Harvard's optimized tables
 - [ ] Add tables to `src/quant.rs` as alternative options
-- [ ] Benchmark against standard tables on Kodak corpus
+- [ ] Benchmark against standard tables on CID22 corpus
 - [ ] Measure: file size, SSIMULACRA2, Butteraugli, DSSIM
 - [ ] Compare to mozjpeg and jpegli baselines
 

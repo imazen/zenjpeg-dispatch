@@ -70,7 +70,7 @@ Generate multiple table sets:
 #### 4. Training Corpus
 Use same corpus as benchmark:
 - codec-corpus images (diverse content)
-- kodak24 (standard reference)
+- CID22 (standard reference)
 - Consider adding specific challenging cases (textures, gradients, etc.)
 
 #### 5. Optimization Framework

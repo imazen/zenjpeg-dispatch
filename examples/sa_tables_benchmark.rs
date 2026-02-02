@@ -12,9 +12,9 @@ use mozjpeg_oxide::Preset;
 use std::fs;
 use std::path::PathBuf;
 use zenjpeg::sa_tables::{
-    get_interpolated_sa_table, select_sa_table, select_sa_table_compress,
-    SA_LUMA_Q35, SA_LUMA_Q50, SA_LUMA_Q75, SA_LUMA_Q95,
-    SA_LUMA_Q35_COMPRESS, SA_LUMA_Q50_COMPRESS, SA_LUMA_Q75_COMPRESS,
+    get_interpolated_sa_table, select_sa_table, select_sa_table_compress, SA_LUMA_Q35,
+    SA_LUMA_Q35_COMPRESS, SA_LUMA_Q50, SA_LUMA_Q50_COMPRESS, SA_LUMA_Q75, SA_LUMA_Q75_COMPRESS,
+    SA_LUMA_Q95,
 };
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -26,7 +26,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Test at the 4 SA trained quality points plus some intermediates
     // to see how "nearest" selection performs at non-exact points
     let quality_levels: Vec<f64> = vec![
-        35.0, 40.0, 45.0, 50.0, 55.0, 60.0, 65.0, 70.0, 75.0, 80.0, 85.0, 90.0, 95.0
+        35.0, 40.0, 45.0, 50.0, 55.0, 60.0, 65.0, 70.0, 75.0, 80.0, 85.0, 90.0, 95.0,
     ];
 
     let config = EvalConfig::builder()
@@ -77,7 +77,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             // Use Q50 to prevent any scaling (scale_factor = 100 = 1:1)
             let encoder = mozjpeg_oxide::Encoder::new(Preset::BaselineBalanced)
-                .quality(50)  // Q50 = no scaling on luma
+                .quality(50) // Q50 = no scaling on luma
                 .custom_luma_qtable(sa_luma)
                 .subsampling(mozjpeg_oxide::Subsampling::S420);
             encoder
@@ -145,7 +145,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Testing quality levels: {:?}", quality_levels);
 
     // Find test images
-    let corpus_dir = PathBuf::from("../codec-eval/codec-corpus/kodak");
+    let corpus_dir = PathBuf::from("../codec-eval/codec-corpus/CID22/CID22-512/training");
     let test_images: Vec<PathBuf> = if corpus_dir.exists() {
         fs::read_dir(&corpus_dir)?
             .filter_map(|e| e.ok())
@@ -154,7 +154,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .take(8) // Use 8 images for reasonably comprehensive benchmark
             .collect()
     } else {
-        println!("Kodak corpus not found at {:?}", corpus_dir);
+        println!("CID22 corpus not found at {:?}", corpus_dir);
         vec![]
     };
 
@@ -222,10 +222,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
     println!("{:-<70}", "");
 
-    let codecs: Vec<String> = ["mozjpeg-std", "mozjpeg-sa-nearest", "mozjpeg-sa-interp", "jpegli"]
-        .iter()
-        .map(|s| s.to_string())
-        .collect();
+    let codecs: Vec<String> = [
+        "mozjpeg-std",
+        "mozjpeg-sa-nearest",
+        "mozjpeg-sa-interp",
+        "jpegli",
+    ]
+    .iter()
+    .map(|s| s.to_string())
+    .collect();
 
     let mut csv_output = String::from("codec,quality,bpp,ssimulacra2,butteraugli,dssim\n");
 
@@ -290,7 +295,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let std_bpp: f64 = std_results.iter().map(|(_, _, b, _, _, _)| b).sum::<f64>() / n;
         let sa_bpp: f64 = sa_results.iter().map(|(_, _, b, _, _, _)| b).sum::<f64>() / n;
         let jpegli_bpp: f64 = if !jpegli_results.is_empty() {
-            jpegli_results.iter().map(|(_, _, b, _, _, _)| b).sum::<f64>() / n
+            jpegli_results
+                .iter()
+                .map(|(_, _, b, _, _, _)| b)
+                .sum::<f64>()
+                / n
         } else {
             0.0
         };
@@ -302,8 +311,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let ssim2_diff = sa_ssim2 - std_ssim2;
 
         println!("Q{}: SA vs Standard:", target_q);
-        println!("  BPP:   {:.3} -> {:.3} ({:+.1}%)", std_bpp, sa_bpp, -bpp_reduction);
-        println!("  SSIM2: {:.2} -> {:.2} ({:+.2})", std_ssim2, sa_ssim2, ssim2_diff);
+        println!(
+            "  BPP:   {:.3} -> {:.3} ({:+.1}%)",
+            std_bpp, sa_bpp, -bpp_reduction
+        );
+        println!(
+            "  SSIM2: {:.2} -> {:.2} ({:+.2})",
+            std_ssim2, sa_ssim2, ssim2_diff
+        );
         if jpegli_bpp > 0.0 {
             println!("  (jpegli: {:.3} bpp for reference)", jpegli_bpp);
         }
