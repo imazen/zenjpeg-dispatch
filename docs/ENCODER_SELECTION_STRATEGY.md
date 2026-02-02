@@ -2,7 +2,7 @@
 
 ## Summary
 
-Based on extensive research with codec-eval across CLIC 2025 and Kodak corpora (382 significant comparisons), this document outlines the optimal encoder selection strategy for zenjpeg.
+Based on extensive research with codec-eval across CLIC 2025 and CID22 corpora (382 significant comparisons), this document outlines the optimal encoder selection strategy for zenjpeg.
 
 ## Key Findings
 

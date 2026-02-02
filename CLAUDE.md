@@ -1,23 +1,35 @@
-# zenjpeg Development Guide
+# zenjpeg-dispatch Development Guide
 
 ## Project Overview
 
-zenjpeg is a high-quality JPEG encoder that combines the best techniques from mozjpeg and jpegli to achieve Pareto-optimal compression at both low and high quality settings.
+zenjpeg-dispatch is a dispatcher library that intelligently selects between mozjpeg and jpegli encoders based on image characteristics to achieve Pareto-optimal compression.
 
-**Key insight**: mozjpeg's trellis quantization excels at low quality (Q < 70), while jpegli's adaptive quantization excels at high quality (Q >= 70). zenjpeg automatically selects the best strategy.
+**Key insight**: mozjpeg's trellis quantization excels at low quality (Q < 70), while jpegli's adaptive quantization excels at high quality (Q >= 70). zenjpeg-dispatch automatically selects the best encoder.
+
+**Note**: The main zenjpeg encoder (a pure Rust implementation) is now at `jpegli-rs/zenjpeg`. This library (`zenjpeg-dispatch`) provides the codec selection/dispatching logic.
 
 ## Quick Start
 
 ```bash
-cd /home/lilith/work/zenjpeg
-cargo test          # 20 tests pass
+cd /home/lilith/work/zenjpeg-dispatch
+cargo test          # Run tests
 cargo build         # Build library
+
+# Run heuristic discovery benchmark (CPU)
+# IMPORTANT: Use /mnt/v/discover/ for output, NEVER /tmp (data is hours to regenerate)
+cargo run --release --example discover_heuristics -- \
+  --corpus ~/work/codec-corpus/CID22/CID22-512/training --output /mnt/v/discover/cid22
+
+# Run with GPU-accelerated SSIM2 (requires CUDA)
+CUDA_PATH=/usr/local/cuda-12.6 cargo run --release --features gpu \
+  --example discover_heuristics -- \
+  --corpus ~/work/codec-corpus/CID22/CID22-512/training --output /mnt/v/discover/cid22 --gpu
 ```
 
 ## Architecture
 
 ```
-zenjpeg/
+zenjpeg-dispatch/
 ├── src/
 │   ├── lib.rs              # Public API re-exports
 │   ├── error.rs            # Error types (#[non_exhaustive])
@@ -32,78 +44,94 @@ zenjpeg/
 │   ├── adaptive_quant.rs   # Adaptive quantization (from jpegli)
 │   ├── strategy.rs         # Encoding strategy selection
 │   └── encode.rs           # Main Encoder API
-├── tests/                  # Integration tests (TBD)
-├── benches/                # Benchmarks (TBD)
+├── examples/
+│   ├── discover_heuristics.rs  # Main benchmarking tool (GPU support)
+│   ├── pareto_benchmark.rs     # Pareto comparison
+│   └── ...
+├── tests/                  # Integration tests
 ├── ARCHITECTURE.md         # Detailed architecture docs
 ├── RESEARCH.md             # Research findings and decisions
 └── CLAUDE.md               # This file
 ```
 
-## Current Status
+## Current Status (Jan 2026)
 
-### Completed
-- [x] Project structure and module layout
-- [x] Core types (Quality, Subsampling, ColorSpace, PixelFormat)
-- [x] Error handling with #[non_exhaustive]
-- [x] Color conversion (RGB→YCbCr)
-- [x] Forward DCT (reference implementation)
-- [x] Quantization tables (standard + mozjpeg)
-- [x] Huffman table handling with two-pass optimization
-- [x] Entropy encoding with symbol frequency counting
-- [x] Full trellis quantization from mozjpeg (rate-distortion optimization)
-- [x] Quality-aware strategy selection (auto/mozjpeg/jpegli/hybrid)
-- [x] Basic Encoder API with Huffman optimization
-- [x] 36 unit/integration tests passing
-- [x] Pareto benchmark (`examples/pareto_benchmark.rs`)
+### Recently Completed
+- [x] **Two-phase GPU processing** - parallel encoding across all CPU cores, sequential GPU metrics
+- [x] **GPU-accelerated Butteraugli** in discover_heuristics
+- [x] **GPU-accelerated DSSIM** in discover_heuristics (~16% faster)
+- [x] **GPU-accelerated SSIMULACRA2** in discover_heuristics (~14x faster)
+- [x] **Lockstep processing mode** with cached metric references
+- [x] **ButteraugliReference caching** for ~45% speedup
+- [x] **Ssimulacra2Reference caching** for CPU mode
+- [x] Proper CUDA cleanup with Drop impl and exit(0) workaround
+- [x] Version filtering for codec cache (only use current versions)
+- [x] Multi-corpus support (`--corpus` can be specified multiple times)
 
-### Current Performance (Dec 2024)
+### Benchmarking Infrastructure
+
+**discover_heuristics.rs** - Main benchmarking tool:
+- 8 codec configurations: mozjpeg-420/444, mozjpeg-max-420/444, jpegli-420/444, cmozjpeg-420, cmozjpeg-max-420
+- 100 quality levels per config
+- 3 quality metrics: SSIMULACRA2, Butteraugli, DSSIM (all GPU-accelerated)
+- GPU mode: `--gpu` flag uses two-phase processing for max CPU utilization
+- Multi-corpus: `--corpus path1 --corpus path2` to combine corpora
+
+**Two-Phase GPU Processing (--gpu flag):**
+```
+Phase 1: Parallel encoding across all CPU cores
+  - 19,200 encodings in ~34s (vs ~700s sequential)
+  - All CPU cores fully utilized
+
+Phase 2: Sequential GPU metrics per image
+  - CUDA context is thread-local, requires sequential processing
+  - GPU metrics: SSIM2 + DSSIM + Butteraugli
+
+Full CID22 benchmark (209 images × 8 configs × 100 quality levels):
+  Wall clock: ~90min
+  Encoding:   distributed across parallel workers
+  Metrics:    GPU-accelerated
+```
+
+**GPU Performance Breakdown (CID22, 19,200 encodings):**
+```
+Encoding:      694.9s  (74.4%)   # Parallelized across all cores
+Decoding:       67.4s  ( 7.2%)
+Butteraugli:    67.5s  ( 7.2%)   # GPU-accelerated
+SSIMULACRA2:    43.7s  ( 4.7%)   # GPU-accelerated
+DSSIM:          60.5s  ( 6.5%)   # GPU-accelerated
+```
+
+### Codec Selection by Metric
+Based on benchmarks (336 images × 6 configs × 100 quality levels):
+
+| Metric | Best Codec | Mean Regret | Notes |
+|--------|------------|-------------|-------|
+| **SSIMULACRA2** | jpegli-420 | 3.87% | Dominates at all quality levels |
+| **Butteraugli** | jpegli-420 | 4.93% | Strongly dominates (50-60% wins) |
+| **DSSIM** | mozjpeg-max-420 | **1.01%** | Progressive encoding helps! |
+
+### Dispatch Performance (Historical)
 At SSIM2 >= 80 quality target:
 - jpegli: **1.310 bpp** (best efficiency)
 - mozjpeg-oxide: 1.437 bpp
-- **zenjpeg: 1.458 bpp** (only 1.5% larger than mozjpeg-oxide!)
+- zenjpeg-dispatch: 1.458 bpp (only 1.5% larger than mozjpeg-oxide!)
 
-zenjpeg appears on Pareto front at multiple quality levels:
-- Low quality: Q30 at 0.485 bpp
-- Very high quality: Q90-Q95 at SSIM2 86-91 (outperforms jpegli at similar bitrates)
+## Pending Work
 
-### Key Improvements Made
-1. **Two-pass Huffman optimization**: Proper frequency counting with Huffman's algorithm
-2. **Full trellis quantization**: Dynamic programming with actual Huffman code lengths
-3. **Quality-aware lambda tuning**: Trellis enabled for Q<80, disabled at Q>=80
-
-### Pending
+### High Priority
 - [ ] Port jpegli's perceptual adaptive quantization (complex algorithm)
-- [ ] Port SIMD DCT from mozjpeg-rs (see below)
+- [ ] Investigate jpegli vs mozjpeg quality gap at high quality
+- [ ] Add more image corpora to benchmarks (CID22, etc.)
 
-### SIMD DCT Available in mozjpeg-rs
+### Medium Priority
+- [ ] Port SIMD DCT from mozjpeg-rs
+- [ ] GPU-accelerate Butteraugli (biggest remaining bottleneck at 58%)
+- [ ] Add parallel image processing for CPU mode
 
-**Location**: `/home/lilith/work/mozjpeg-rs/src/dct.rs` (1,546 lines)
-
-Three implementations ready to port:
-1. **Scalar Loeffler** with `#[multiversion]` autovectorization
-2. **Row-parallel SIMD** using `wide::i32x4` (4 rows at once)
-3. **Transpose-based SIMD** using `wide::i32x8` (8 rows at once, best for cache)
-
-**Hand-written AVX2**: `/home/lilith/work/mozjpeg-rs/src/simd/x86_64/avx2.rs` (502 lines)
-- Uses `core::arch::x86_64` intrinsics
-- ~15% faster than autovectorized version
-- Gated behind `simd-intrinsics` feature flag
-
-**Dependencies**:
-- `multiversion` crate for compile-time platform dispatch
-- `wide` crate for portable SIMD vectors
-- All have scalar fallbacks for unsupported platforms
-
-### Completed
-- [x] Progressive encoding (full support with all scan scripts)
-- [x] Documentation updates (ARCHITECTURE.md)
-- [x] Metric-specific strategy selection (OptimizeFor API)
-- [x] Perceptual quality targeting (binary search)
-
-### Known Limitations
-- Simplified variance-based AQ hurts quality - needs full jpegli perceptual AQ port
-- Trellis disabled at Q>=80 to prevent quality degradation
-- 11% larger than jpegli at SSIM2>=80 (gap requires perceptual AQ to close)
+### Low Priority
+- [ ] Design custom SA tables optimized for SSIMULACRA2/Butteraugli
+- [ ] Add validation mode to verify cached encodings
 
 ## Key Design Decisions
 
@@ -131,6 +159,29 @@ Encoder::max_quality()     // High quality, adaptive quant
 Encoder::fastest()         // No optimization, baseline
 ```
 
+## GPU Support
+
+### Requirements
+- CUDA 12.x installed (`CUDA_PATH` environment variable)
+- Build with `--features gpu`
+
+### GPU Feature Dependencies
+```toml
+[features]
+gpu = ["ssimulacra2-cuda", "dssim-cuda", "cudarse-driver", "cudarse-npp"]
+
+[dependencies]
+ssimulacra2-cuda = { path = "../turbo-metrics/crates/ssimulacra2-cuda", optional = true }
+dssim-cuda = { path = "../turbo-metrics/crates/dssim-cuda", optional = true }
+cudarse-driver = { path = "../turbo-metrics/crates/cudarse/cudarse-driver", optional = true }
+cudarse-npp = { path = "../turbo-metrics/crates/cudarse/cudarse-npp", features = ["isu", "ist"], optional = true }
+```
+
+### Known GPU Issues
+1. **CUDA cleanup crash**: Uses `std::process::exit(0)` at end of GPU mode
+2. **Thread locality**: GPU context is thread-local, requires sequential processing
+3. **Fixed dimensions**: GPU context tied to image dimensions, recreated per image
+
 ## Testing
 
 ```bash
@@ -144,17 +195,23 @@ cargo test -- --nocapture     # Show output
 
 ### Core
 - `mozjpeg-oxide` (path: ../mozjpeg-rs) - mozjpeg Rust port
-- `jpegli` (path: ../jpegli/jpegli-rs/jpegli) - jpegli Rust port
+- `jpegli` (path: ../jpegli-rs/jpegli-rs) - jpegli Rust port
 - `bytemuck` - Safe transmutes
 - `wide` - SIMD
 
 ### Dev/Testing
 - `codec-eval` (path: ../codec-eval) - Quality metrics and comparison
-- `butteraugli` - Perceptual quality metric
+- `butteraugli` (path: ../butteraugli/butteraugli) - Perceptual quality metric
+- `fast-ssim2` - Fast SSIMULACRA2 (CPU)
 - `dssim` - DSSIM quality metric
-- `ssimulacra2` - SSIMULACRA2 quality metric
 - `png` - Image I/O
 - `jpeg-decoder` - JPEG verification
+
+### GPU (optional)
+- `ssimulacra2-cuda` (path: ../turbo-metrics) - GPU SSIMULACRA2
+- `dssim-cuda` (path: ../turbo-metrics) - GPU DSSIM
+- `cudarse-driver` - CUDA driver bindings
+- `cudarse-npp` - NPP image processing
 
 ## Workflow
 
@@ -164,21 +221,25 @@ cargo test -- --nocapture     # Show output
 3. Run `cargo test`
 4. Commit with descriptive message
 
-### Adding Features
-1. Add module with unit tests
-2. Wire into encode.rs
-3. Add integration tests
-4. Update ARCHITECTURE.md
-5. Benchmark with codec-eval
-
-### Benchmarking
+### Running Benchmarks
 ```bash
-# Run Pareto comparison (uses Kodak corpus)
-cargo run --release --example pareto_benchmark
+# Full benchmark with GPU acceleration
+CUDA_PATH=/usr/local/cuda-12.6 cargo run --release --features gpu \
+  --example discover_heuristics -- \
+  --corpus ~/work/codec-corpus/CID22/CID22-512/training \
+  --output ./results \
+  --gpu
 
-# Results written to comparison_outputs/
-# - pareto_front.json   # Pareto-optimal points
-# - all_points.csv      # All quality/size data points
+# CPU-only benchmark
+cargo run --release --example discover_heuristics -- \
+  --corpus ~/work/codec-corpus/CID22/CID22-512/training \
+  --output ./results
+
+# Quick test (1 image)
+cargo run --release --example discover_heuristics -- \
+  --corpus ~/work/codec-corpus/CID22/CID22-512/training \
+  --output ./results \
+  --max-images 1
 ```
 
 ## Quality Metrics
@@ -187,24 +248,20 @@ cargo run --release --example pareto_benchmark
 
 | Metric | Package | Range | Notes |
 |--------|---------|-------|-------|
-| DSSIM | dssim | 0 = identical | Primary metric |
-| SSIMULACRA2 | ssimulacra2 | 100 = identical | Secondary |
+| SSIMULACRA2 | fast-ssim2 | 100 = identical | Primary (GPU accelerated) |
 | Butteraugli | butteraugli | <1.0 good | Perceptual |
+| DSSIM | dssim | 0 = identical | Structural |
 
-## Common Issues
+## Corpus Locations
 
-### Import Conflicts
-Types like `TrellisConfig` and `AdaptiveQuantConfig` are defined in their respective modules and re-exported from `types.rs`. Import from `crate::types` for public API.
-
-### Test Images
-Use codec-corpus for test images:
-```rust
-use codec_eval::corpus::Corpus;
-let corpus = Corpus::discover()?;
-```
+- **CID22 training**: `~/work/codec-corpus/CID22/CID22-512/training/` (209 images, 512x512)
+- **CID22 validation**: `~/work/codec-corpus/CID22/CID22-512/validation/` (41 images, 512x512)
+- **CLIC2025 validation**: `~/work/codec-corpus/clic2025/validation/` (32 images, variable size)
+- **CLIC2025 final-test**: `~/work/codec-corpus/clic2025/final-test/` (30 images, variable size)
 
 ## References
 
 - [mozjpeg-rs CLAUDE.md](../mozjpeg-rs/CLAUDE.md) - mozjpeg implementation details
-- [jpegli-rs CLAUDE.md](../jpegli/jpegli-rs/CLAUDE.md) - jpegli implementation details
+- [jpegli-rs CLAUDE.md](../jpegli-rs/jpegli-rs/CLAUDE.md) - jpegli implementation details
 - [codec-eval CLAUDE.md](../codec-eval/CLAUDE.md) - Evaluation methodology
+- [glassa CLAUDE.md](../glassa/CLAUDE.md) - GPU optimization for quantization tables

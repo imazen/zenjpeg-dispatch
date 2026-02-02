@@ -1,11 +1,11 @@
-//! Error types for zenjpeg
+//! Error types for zenjpeg-dispatch
 
 use std::fmt;
 
-/// Result type for zenjpeg operations
+/// Result type for zenjpeg-dispatch operations
 pub type Result<T> = std::result::Result<T, Error>;
 
-/// Error type for zenjpeg operations
+/// Error type for zenjpeg-dispatch operations
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum Error {

@@ -208,7 +208,7 @@ impl Encoder {
     ///
     /// # Example
     /// ```
-    /// use zenjpeg::{Encoder, OptimizeFor};
+    /// use zenjpeg_dispatch::{Encoder, OptimizeFor};
     ///
     /// let encoder = Encoder::new()
     ///     .optimize_for(OptimizeFor::Dssim);  // Optimize for structural similarity
@@ -290,30 +290,80 @@ impl Encoder {
         // Select encoding strategy
         let selected = select_strategy(&self.quality, self.strategy);
 
-        // For Jpegli strategy, delegate to the actual jpegli encoder
-        // This gives us full perceptual quality (XYB, proper AQ, etc.)
-        // But respect user's explicit progressive request (jpegli doesn't support it)
-        if selected.approach == EncodingApproach::Jpegli && self.progressive != Some(true) {
-            return self.encode_rgb_with_jpegli(pixels, width, height);
+        // Delegate to the appropriate encoder based on strategy
+        match selected.approach {
+            EncodingApproach::Jpegli => {
+                // jpegli-rs for perceptual quality
+                self.encode_rgb_with_jpegli(pixels, width, height)
+            }
+            EncodingApproach::Mozjpeg | EncodingApproach::Hybrid => {
+                // mozjpeg-oxide for trellis-optimized compression
+                self.encode_rgb_with_mozjpeg(pixels, width, height)
+            }
+        }
+    }
+
+    /// Encode RGB image using mozjpeg-oxide crate.
+    ///
+    /// Uses mozjpeg's advanced compression features:
+    /// - Trellis quantization
+    /// - Progressive JPEG (optional)
+    /// - Huffman optimization
+    /// - Overshoot deringing
+    fn encode_rgb_with_mozjpeg(
+        &self,
+        pixels: &[u8],
+        width: usize,
+        height: usize,
+    ) -> Result<Vec<u8>> {
+        let q = self.quality.value() as u8;
+
+        // Determine deringing from image analysis
+        let use_deringing = crate::analysis::should_use_deringing(pixels, width, height);
+
+        // Map our settings to mozjpeg-oxide settings
+        let mut encoder =
+            mozjpeg_oxide::Encoder::new(mozjpeg_oxide::Preset::ProgressiveBalanced).quality(q);
+
+        // Progressive encoding
+        if self.progressive == Some(true) {
+            encoder = encoder.progressive(true);
         }
 
-        // Determine deringing from image analysis (while we still have RGB)
-        let use_deringing = self.should_use_deringing(&selected, Some((pixels, width, height)));
+        // Subsampling: use evalchroma to analyze image content (like imageflow does)
+        // This adapts subsampling based on chroma complexity, upgrading to 4:4:4 for
+        // images with significant chroma detail
+        let subsampling = if self.subsampling == Subsampling::S444 {
+            // User explicitly requested no subsampling - respect that
+            Subsampling::S444
+        } else {
+            // Use evalchroma to determine optimal subsampling
+            let (recommended, _chroma_q, _sharpness) =
+                crate::analysis::evaluate_chroma_subsampling(pixels, width, height, q as f32);
+            recommended
+        };
 
-        // Convert to YCbCr
-        let ycbcr = convert_rgb_to_ycbcr(pixels, width, height);
-        let (y_plane, cb_plane, cr_plane) = deinterleave_ycbcr(&ycbcr, width, height);
+        encoder = encoder.subsampling(match subsampling {
+            Subsampling::S444 => mozjpeg_oxide::Subsampling::S444,
+            Subsampling::S422 => mozjpeg_oxide::Subsampling::S422,
+            Subsampling::S420 => mozjpeg_oxide::Subsampling::S420,
+        });
 
-        // Encode with selected strategy
-        self.encode_ycbcr_planes(
-            &y_plane,
-            &cb_plane,
-            &cr_plane,
-            width,
-            height,
-            &selected,
-            use_deringing,
-        )
+        // Deringing
+        encoder = encoder.overshoot_deringing(use_deringing);
+
+        // Huffman optimization
+        encoder = encoder.optimize_huffman(self.optimize_huffman);
+
+        let result = encoder.encode_rgb(pixels, width as u32, height as u32);
+
+        match result {
+            Ok(data) => Ok(data),
+            Err(e) => Err(Error::EncodingFailed {
+                stage: "mozjpeg",
+                reason: format!("{:?}", e),
+            }),
+        }
     }
 
     /// Encode targeting a specific perceptual quality (Butteraugli distance).
@@ -409,53 +459,56 @@ impl Encoder {
     fn encode_rgb_internal(&self, pixels: &[u8], width: usize, height: usize) -> Result<Vec<u8>> {
         let selected = select_strategy(&self.quality, self.strategy);
 
-        if selected.approach == EncodingApproach::Jpegli && self.progressive != Some(true) {
-            return self.encode_rgb_with_jpegli(pixels, width, height);
+        // Delegate to the appropriate encoder based on strategy
+        match selected.approach {
+            EncodingApproach::Jpegli => self.encode_rgb_with_jpegli(pixels, width, height),
+            EncodingApproach::Mozjpeg | EncodingApproach::Hybrid => {
+                self.encode_rgb_with_mozjpeg(pixels, width, height)
+            }
         }
-
-        // Determine deringing from image analysis (while we still have RGB)
-        let use_deringing = self.should_use_deringing(&selected, Some((pixels, width, height)));
-
-        let ycbcr = convert_rgb_to_ycbcr(pixels, width, height);
-        let (y_plane, cb_plane, cr_plane) = deinterleave_ycbcr(&ycbcr, width, height);
-        self.encode_ycbcr_planes(
-            &y_plane,
-            &cb_plane,
-            &cr_plane,
-            width,
-            height,
-            &selected,
-            use_deringing,
-        )
     }
 
-    /// Encode RGB image using our forked jpegli encoder.
+    /// Encode RGB image using the zenjpeg encoder.
     ///
-    /// Uses the forked jpegli module for full perceptual quality:
-    /// - XYB color space processing
+    /// Uses the zenjpeg encoder for full perceptual quality:
+    /// - YCbCr or XYB color space processing
     /// - Butteraugli-based adaptive quantization
     /// - Perceptual coefficient optimization
     ///
-    /// This is a fork that we can modify to improve upon jpegli.
+    /// Delegates to the zenjpeg crate for full perceptual quality encoding.
     fn encode_rgb_with_jpegli(
         &self,
         pixels: &[u8],
         width: usize,
         height: usize,
     ) -> Result<Vec<u8>> {
+        use zenjpeg_encoder::encoder::{
+            ChromaSubsampling, EncoderConfig, PixelLayout, Unstoppable,
+        };
+
         let q = self.quality.value();
 
-        let result = crate::jpegli::Encoder::new()
-            .width(width as u32)
-            .height(height as u32)
-            .pixel_format(crate::jpegli::PixelFormat::Rgb)
-            .quality(crate::jpegli::Quality::Traditional(q as f32))
-            .encode(pixels);
+        let config = EncoderConfig::ycbcr(q, ChromaSubsampling::None);
+        let encode_result = config.encode_from_bytes(width as u32, height as u32, PixelLayout::Rgb8Srgb);
 
-        match result {
-            Ok(data) => Ok(data),
+        match encode_result {
+            Ok(mut encoder) => {
+                if let Err(e) = encoder.push_packed(pixels, Unstoppable) {
+                    return Err(Error::EncodingFailed {
+                        stage: "zenjpeg push",
+                        reason: format!("{:?}", e),
+                    });
+                }
+                match encoder.finish() {
+                    Ok(data) => Ok(data),
+                    Err(e) => Err(Error::EncodingFailed {
+                        stage: "zenjpeg finish",
+                        reason: format!("{:?}", e),
+                    }),
+                }
+            }
             Err(e) => Err(Error::EncodingFailed {
-                stage: "jpegli",
+                stage: "zenjpeg config",
                 reason: format!("{:?}", e),
             }),
         }
@@ -468,39 +521,81 @@ impl Encoder {
 
         let selected = select_strategy(&self.quality, self.strategy);
 
-        // For Jpegli strategy, delegate to the actual jpegli encoder
-        if selected.approach == EncodingApproach::Jpegli {
-            return self.encode_gray_with_jpegli(pixels, width, height);
+        // If progressive is explicitly requested, use mozjpeg (jpegli doesn't support progressive)
+        if self.progressive == Some(true) {
+            return self.encode_gray_with_mozjpeg(pixels, width, height);
         }
 
-        // Determine deringing - use strategy-based default for grayscale
-        // (no RGB available for image analysis)
-        let use_deringing = self.should_use_deringing(&selected, None);
-
-        // Grayscale uses only Y component
-        self.encode_gray_plane(pixels, width, height, &selected, use_deringing)
+        // Delegate to the appropriate encoder based on strategy
+        match selected.approach {
+            EncodingApproach::Jpegli => self.encode_gray_with_jpegli(pixels, width, height),
+            EncodingApproach::Mozjpeg | EncodingApproach::Hybrid => {
+                self.encode_gray_with_mozjpeg(pixels, width, height)
+            }
+        }
     }
 
-    /// Encode grayscale image using our forked jpegli encoder.
+    /// Encode grayscale image using mozjpeg-oxide crate.
+    fn encode_gray_with_mozjpeg(
+        &self,
+        pixels: &[u8],
+        width: usize,
+        height: usize,
+    ) -> Result<Vec<u8>> {
+        let q = self.quality.value() as u8;
+
+        let mut encoder =
+            mozjpeg_oxide::Encoder::new(mozjpeg_oxide::Preset::ProgressiveBalanced).quality(q);
+
+        if self.progressive == Some(true) {
+            encoder = encoder.progressive(true);
+        }
+
+        encoder = encoder.optimize_huffman(self.optimize_huffman);
+
+        let result = encoder.encode_gray(pixels, width as u32, height as u32);
+
+        match result {
+            Ok(data) => Ok(data),
+            Err(e) => Err(Error::EncodingFailed {
+                stage: "mozjpeg",
+                reason: format!("{:?}", e),
+            }),
+        }
+    }
+
+    /// Encode grayscale image using the zenjpeg crate.
     fn encode_gray_with_jpegli(
         &self,
         pixels: &[u8],
         width: usize,
         height: usize,
     ) -> Result<Vec<u8>> {
+        use zenjpeg_encoder::encoder::{EncoderConfig, PixelLayout, Unstoppable};
+
         let q = self.quality.value();
 
-        let result = crate::jpegli::Encoder::new()
-            .width(width as u32)
-            .height(height as u32)
-            .pixel_format(crate::jpegli::PixelFormat::Gray)
-            .quality(crate::jpegli::Quality::Traditional(q as f32))
-            .encode(pixels);
+        let config = EncoderConfig::grayscale(q);
+        let encode_result = config.encode_from_bytes(width as u32, height as u32, PixelLayout::Gray8Srgb);
 
-        match result {
-            Ok(data) => Ok(data),
+        match encode_result {
+            Ok(mut encoder) => {
+                if let Err(e) = encoder.push_packed(pixels, Unstoppable) {
+                    return Err(Error::EncodingFailed {
+                        stage: "zenjpeg push",
+                        reason: format!("{:?}", e),
+                    });
+                }
+                match encoder.finish() {
+                    Ok(data) => Ok(data),
+                    Err(e) => Err(Error::EncodingFailed {
+                        stage: "zenjpeg finish",
+                        reason: format!("{:?}", e),
+                    }),
+                }
+            }
             Err(e) => Err(Error::EncodingFailed {
-                stage: "jpegli",
+                stage: "zenjpeg config",
                 reason: format!("{:?}", e),
             }),
         }

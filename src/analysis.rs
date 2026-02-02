@@ -2,10 +2,118 @@
 //!
 //! Uses evalchroma for chroma analysis and adds luma analysis
 //! to decide between trellis (mozjpeg) and adaptive quantization (jpegli).
+//!
+//! ## Codec Selection by Quality Metric
+//!
+//! **Important**: The optimal codec depends on which quality metric you're targeting!
+//!
+//! ### Butteraugli Optimization (jpegli wins)
+//!
+//! Use [`select_codec_for_butteraugli`] for perceptual quality optimization.
+//!
+//! | Target BA | Best Codec | Win Rate |
+//! |-----------|------------|----------|
+//! | ≤ 2.0 | jpegli-444 | Required for achievability |
+//! | 2.0-3.5 | jpegli-444/420 | 444 for chroma-rich |
+//! | 3.5-5.0 | jpegli-420 | 60-70% wins |
+//! | 5.0-8.0 | mozjpeg-420 | Crossover region |
+//! | > 8.0 | mozjpeg-420/444 | jpegli can't achieve |
+//!
+//! ### DSSIM Optimization (mozjpeg wins)
+//!
+//! Use [`select_codec_for_dssim`] for structural similarity optimization.
+//!
+//! | Target DSSIM | Best Codec | Win Rate |
+//! |--------------|------------|----------|
+//! | ≤ 0.005 | mozjpeg-420 | 77-96% |
+//! | 0.005-0.015 | mozjpeg-420 | 54-71% |
+//! | 0.015-0.025 | jpegli-420 | ~51% (only jpegli region) |
+//! | > 0.025 | mozjpeg-420 | 50-66% |
+//!
+//! ### Key Insight
+//!
+//! The metrics disagree on codec preference:
+//! - **Butteraugli**: jpegli produces perceptually better images (lower BA at same BPP)
+//! - **DSSIM**: mozjpeg produces structurally more similar images (lower DSSIM at same BPP)
+//!
+//! Choose based on your use case:
+//! - Perceptual quality (photos, visual media): Use Butteraugli → jpegli
+//! - Structural similarity (archival, scientific): Use DSSIM → mozjpeg
 
+use crate::types::Subsampling;
 use evalchroma::{adjust_sampling, ChromaEvaluation, PixelSize, Sharpness};
 use imgref::ImgRef;
 use rgb::RGB8;
+
+/// Evaluate chroma subsampling for an image using evalchroma.
+///
+/// This analyzes the image content to determine the optimal chroma subsampling,
+/// following the same approach as imageflow. The function returns:
+/// - The recommended Subsampling mode
+/// - The adjusted chroma quality (may be lower than input if image can tolerate it)
+/// - The sharpness score (for diagnostics)
+///
+/// # Arguments
+/// * `pixels` - RGB8 pixel data (3 bytes per pixel)
+/// * `width` - Image width
+/// * `height` - Image height
+/// * `quality` - JPEG quality (1-100), used to determine acceptable chroma loss
+///
+/// # Returns
+/// `(Subsampling, chroma_quality, Option<Sharpness>)`
+pub fn evaluate_chroma_subsampling(
+    pixels: &[u8],
+    width: usize,
+    height: usize,
+    quality: f32,
+) -> (Subsampling, f32, Option<Sharpness>) {
+    // Convert to RGB8 slice for evalchroma
+    let rgb_pixels: Vec<RGB8> = pixels
+        .chunks_exact(3)
+        .map(|c| RGB8::new(c[0], c[1], c[2]))
+        .collect();
+
+    let img = ImgRef::new(&rgb_pixels, width, height);
+
+    // Start with 4:2:0 as worst allowed, let evalchroma upgrade if needed
+    let max_sampling = PixelSize {
+        cb: (2, 2),
+        cr: (2, 2),
+    };
+
+    let result = adjust_sampling(img, max_sampling, quality);
+
+    // Map evalchroma's PixelSize to our Subsampling enum
+    let subsampling = pixel_size_to_subsampling(&result.subsampling);
+
+    (subsampling, result.chroma_quality, result.sharpness)
+}
+
+/// Convert evalchroma's PixelSize to our Subsampling enum.
+///
+/// evalchroma returns per-channel subsampling as (h, v) factors where:
+/// - (1, 1) = no subsampling (full resolution)
+/// - (2, 1) = horizontal subsampling only
+/// - (1, 2) = vertical subsampling only
+/// - (2, 2) = both horizontal and vertical
+///
+/// We map to the closest standard JPEG subsampling mode:
+/// - S444 = no subsampling
+/// - S422 = horizontal only
+/// - S420 = both directions
+fn pixel_size_to_subsampling(ps: &PixelSize) -> Subsampling {
+    // Use the maximum subsampling from both Cb and Cr channels
+    let max_h = ps.cb.0.max(ps.cr.0);
+    let max_v = ps.cb.1.max(ps.cr.1);
+
+    match (max_h, max_v) {
+        (1, 1) => Subsampling::S444, // No subsampling
+        (2, 1) => Subsampling::S422, // Horizontal only
+        (1, 2) => Subsampling::S422, // Vertical only (map to 4:2:2)
+        (2, 2) => Subsampling::S420, // Both directions
+        _ => Subsampling::S420,      // Default to 4:2:0 for unknown
+    }
+}
 
 /// Image characteristics used to select encoding strategy
 #[derive(Debug, Clone)]
@@ -39,6 +147,233 @@ pub enum RecommendedApproach {
     AdaptiveQuant,
     /// Use both with blend (hybrid approach)
     Hybrid,
+}
+
+/// Recommended codec configuration for a target quality metric.
+///
+/// This specifies the encoder (jpegli vs mozjpeg), subsampling mode,
+/// and whether to use max compression (progressive + optimize_scans).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CodecRecommendation {
+    /// Use jpegli encoder with specified subsampling
+    Jpegli { subsampling: Subsampling },
+    /// Use mozjpeg encoder with specified subsampling (baseline mode)
+    MozJpeg { subsampling: Subsampling },
+    /// Use mozjpeg encoder with max compression (progressive + optimize_scans)
+    MozJpegMax { subsampling: Subsampling },
+}
+
+impl CodecRecommendation {
+    /// Returns true if this recommendation uses jpegli
+    #[must_use]
+    pub fn is_jpegli(&self) -> bool {
+        matches!(self, CodecRecommendation::Jpegli { .. })
+    }
+
+    /// Returns true if this recommendation uses mozjpeg (any variant)
+    #[must_use]
+    pub fn is_mozjpeg(&self) -> bool {
+        matches!(
+            self,
+            CodecRecommendation::MozJpeg { .. } | CodecRecommendation::MozJpegMax { .. }
+        )
+    }
+
+    /// Returns true if this recommendation uses mozjpeg max compression
+    #[must_use]
+    pub fn is_mozjpeg_max(&self) -> bool {
+        matches!(self, CodecRecommendation::MozJpegMax { .. })
+    }
+
+    /// Returns the subsampling mode
+    #[must_use]
+    pub fn subsampling(&self) -> Subsampling {
+        match self {
+            CodecRecommendation::Jpegli { subsampling }
+            | CodecRecommendation::MozJpeg { subsampling }
+            | CodecRecommendation::MozJpegMax { subsampling } => *subsampling,
+        }
+    }
+}
+
+/// Select the optimal codec configuration for a target Butteraugli distance.
+///
+/// This heuristic is based on regret-minimization analysis of 86 images
+/// (CID22 + CLIC corpora) across 15 Butteraugli quality targets.
+///
+/// # Key Findings
+///
+/// - **High quality (BA ≤ 2.0)**: jpegli-444 required for achievability
+/// - **Medium-high (BA 2.0-3.5)**: jpegli-444 for chroma-rich, else jpegli-420
+/// - **Medium (BA 3.5-5.0)**: jpegli-420 dominates (60-70% wins)
+/// - **Low quality (BA 5.0-8.0)**: mozjpeg becomes competitive
+/// - **Very low (BA > 8.0)**: mozjpeg required (jpegli can't achieve target)
+///
+/// # Arguments
+///
+/// * `analysis` - Image analysis results from [`analyze_image`]
+/// * `target_butteraugli` - Target Butteraugli distance (lower = better quality)
+///
+/// # Returns
+///
+/// The recommended codec and subsampling configuration.
+///
+/// # Example
+///
+/// ```ignore
+/// let analysis = analyze_image(&pixels, width, height, 75.0);
+/// let codec = select_codec_for_butteraugli(&analysis, 2.0);
+///
+/// match codec {
+///     CodecRecommendation::Jpegli { subsampling } => {
+///         // Use jpegli encoder with this subsampling
+///     }
+///     CodecRecommendation::MozJpeg { subsampling } => {
+///         // Use mozjpeg encoder with this subsampling
+///     }
+/// }
+/// ```
+#[must_use]
+pub fn select_codec_for_butteraugli(
+    analysis: &ImageAnalysis,
+    target_butteraugli: f32,
+) -> CodecRecommendation {
+    let edge_density = analysis.edge_density;
+    let chroma_complexity = analysis.chroma.chroma_quality; // Higher = more complex chroma
+
+    // VERY LOW QUALITY (BA > 8): mozjpeg required
+    // jpegli can't achieve these targets for ~45% of images
+    if target_butteraugli > 8.0 {
+        if chroma_complexity > 0.18 {
+            return CodecRecommendation::MozJpeg {
+                subsampling: Subsampling::S444,
+            };
+        }
+        return CodecRecommendation::MozJpeg {
+            subsampling: Subsampling::S420,
+        };
+    }
+
+    // LOW QUALITY (BA 5-8): mozjpeg often wins (66%+ at crossover)
+    if target_butteraugli > 5.0 {
+        if edge_density <= 0.04 && chroma_complexity > 0.17 {
+            return CodecRecommendation::MozJpeg {
+                subsampling: Subsampling::S444,
+            };
+        }
+        return CodecRecommendation::MozJpeg {
+            subsampling: Subsampling::S420,
+        };
+    }
+
+    // HIGH QUALITY (BA <= 2): jpegli-444 required for achievability
+    if target_butteraugli <= 2.0 {
+        return CodecRecommendation::Jpegli {
+            subsampling: Subsampling::S444,
+        };
+    }
+
+    // MEDIUM-HIGH QUALITY (BA 2-3.5): jpegli-444 for chroma-rich images
+    if target_butteraugli <= 3.5 && chroma_complexity > 0.14 {
+        return CodecRecommendation::Jpegli {
+            subsampling: Subsampling::S444,
+        };
+    }
+
+    // MEDIUM QUALITY (BA 3.5-5): jpegli-420 (default, wins 60-70%)
+    CodecRecommendation::Jpegli {
+        subsampling: Subsampling::S420,
+    }
+}
+
+/// Select the optimal codec using only image analysis (without target quality).
+///
+/// This is a simpler version that picks based on image characteristics alone.
+/// Use [`select_codec_for_butteraugli`] when you have a specific quality target.
+///
+/// # Arguments
+///
+/// * `analysis` - Image analysis results from [`analyze_image`]
+///
+/// # Returns
+///
+/// A reasonable default codec configuration based on image content.
+#[must_use]
+pub fn select_codec_auto(analysis: &ImageAnalysis) -> CodecRecommendation {
+    // Default to medium quality target (BA ~4)
+    select_codec_for_butteraugli(analysis, 4.0)
+}
+
+/// Select the optimal codec configuration for a target DSSIM value.
+///
+/// DSSIM: 0 = identical, higher = worse quality.
+/// Typical ranges:
+///   - 0.001 = very high quality (visually lossless)
+///   - 0.005 = high quality
+///   - 0.01  = medium-high quality
+///   - 0.02  = medium quality
+///   - 0.03+ = low quality
+///
+/// # Key Findings (from regret analysis on 336 images)
+///
+/// **mozjpeg-max (progressive + optimize_scans) wins for DSSIM optimization**:
+/// - mozjpeg-max-420 has only 1.01% mean regret (best single strategy)
+/// - At Z≥55 (DSSIM ≤ 0.0055): mozjpeg-max-420 wins 41-61% of images
+/// - At Z<55 (DSSIM > 0.0055): mozjpeg-420 and mozjpeg-max-420 are competitive
+///
+/// | Target DSSIM | Best Codec | Win Rate |
+/// |--------------|------------|----------|
+/// | ≤ 0.003 | mozjpeg-max-420 | 55-61% |
+/// | 0.003-0.006 | mozjpeg-max-420 | 47-54% |
+/// | 0.006-0.010 | mozjpeg-420 | 38-42% (competitive) |
+/// | > 0.010 | mozjpeg-420 | 35-37% |
+///
+/// Progressive encoding helps DSSIM because it orders coefficients by
+/// frequency, which DSSIM weights more accurately than baseline ordering.
+///
+/// # Arguments
+///
+/// * `analysis` - Image analysis results from [`analyze_image`]
+/// * `target_dssim` - Target DSSIM value (lower = better quality)
+///
+/// # Returns
+///
+/// The recommended codec and subsampling configuration.
+#[must_use]
+pub fn select_codec_for_dssim(analysis: &ImageAnalysis, target_dssim: f32) -> CodecRecommendation {
+    let chroma_complexity = analysis.chroma.chroma_quality;
+
+    // HIGH QUALITY (DSSIM <= 0.006, Z >= 55): mozjpeg-max dominates
+    // mozjpeg-max-420 has 0.5-0.9% regret vs 1.5-1.7% for baseline mozjpeg
+    if target_dssim <= 0.006 {
+        if chroma_complexity > 0.18 {
+            return CodecRecommendation::MozJpegMax {
+                subsampling: Subsampling::S444,
+            };
+        }
+        return CodecRecommendation::MozJpegMax {
+            subsampling: Subsampling::S420,
+        };
+    }
+
+    // MEDIUM QUALITY (DSSIM 0.006-0.015): mozjpeg-max still slightly better
+    // Both have ~1.5-2% regret, but max is more consistent
+    if target_dssim <= 0.015 {
+        return CodecRecommendation::MozJpegMax {
+            subsampling: Subsampling::S420,
+        };
+    }
+
+    // LOW QUALITY (DSSIM > 0.015): baseline mozjpeg is competitive
+    // At very low quality, progressive overhead doesn't help as much
+    if chroma_complexity > 0.18 {
+        return CodecRecommendation::MozJpeg {
+            subsampling: Subsampling::S444,
+        };
+    }
+    CodecRecommendation::MozJpeg {
+        subsampling: Subsampling::S420,
+    }
 }
 
 /// Quick check if deringing would benefit this image.
@@ -338,7 +673,7 @@ pub fn estimate_bpp(quality: f32, flat_block_pct: f32) -> f32 {
 /// Decide encoding approach using research-validated prediction model
 ///
 /// Based on 382 significant BPP-matched comparisons across CLIC 2025
-/// and Kodak corpora. Achieves 86.6% accuracy in predicting which
+/// and CID22 corpora. Achieves 86.6% accuracy in predicting which
 /// encoder produces better perceptual quality at matched file size.
 ///
 /// Key finding: jpegli wins ~84% of cases. The only category where
@@ -384,7 +719,10 @@ pub fn decide_approach_for_metric(
     match metric {
         OptimizeFor::Butteraugli => {
             // jpegli wins 84% - only use mozjpeg for very flat + medium BPP
-            if uniformity > 75.0 && complexity < 20.0 && estimated_bpp >= 0.35 && estimated_bpp < 0.6
+            if uniformity > 75.0
+                && complexity < 20.0
+                && estimated_bpp >= 0.35
+                && estimated_bpp < 0.6
             {
                 RecommendedApproach::Trellis
             } else {
@@ -561,5 +899,191 @@ mod tests {
             analysis.recommended_approach,
             RecommendedApproach::AdaptiveQuant
         );
+    }
+
+    #[test]
+    fn test_codec_selection_high_quality() {
+        // At high quality (BA <= 2.0), should always recommend jpegli-444
+        let pixels = vec![128u8; 64 * 64 * 3];
+        let analysis = analyze_image(&pixels, 64, 64, 90.0);
+
+        let rec = select_codec_for_butteraugli(&analysis, 1.0);
+        assert!(rec.is_jpegli());
+        assert_eq!(rec.subsampling(), Subsampling::S444);
+
+        let rec = select_codec_for_butteraugli(&analysis, 2.0);
+        assert!(rec.is_jpegli());
+        assert_eq!(rec.subsampling(), Subsampling::S444);
+    }
+
+    #[test]
+    fn test_codec_selection_medium_quality() {
+        // At medium quality (BA 3.5-5), should recommend jpegli-420
+        let pixels = vec![128u8; 64 * 64 * 3];
+        let analysis = analyze_image(&pixels, 64, 64, 75.0);
+
+        let rec = select_codec_for_butteraugli(&analysis, 4.0);
+        assert!(rec.is_jpegli());
+        assert_eq!(rec.subsampling(), Subsampling::S420);
+    }
+
+    #[test]
+    fn test_codec_selection_low_quality() {
+        // At low quality (BA 5-8), should recommend mozjpeg
+        let pixels = vec![128u8; 64 * 64 * 3];
+        let analysis = analyze_image(&pixels, 64, 64, 50.0);
+
+        let rec = select_codec_for_butteraugli(&analysis, 6.0);
+        assert!(rec.is_mozjpeg());
+    }
+
+    #[test]
+    fn test_codec_selection_very_low_quality() {
+        // At very low quality (BA > 8), must use mozjpeg (jpegli can't achieve)
+        let pixels = vec![128u8; 64 * 64 * 3];
+        let analysis = analyze_image(&pixels, 64, 64, 30.0);
+
+        let rec = select_codec_for_butteraugli(&analysis, 10.0);
+        assert!(rec.is_mozjpeg());
+        // Subsampling depends on chroma analysis - either is valid for very low quality
+
+        let rec = select_codec_for_butteraugli(&analysis, 15.0);
+        assert!(rec.is_mozjpeg());
+    }
+
+    #[test]
+    fn test_codec_selection_chroma_complex() {
+        // Create a chroma-rich image (high color variance)
+        let mut pixels = vec![0u8; 64 * 64 * 3];
+        for y in 0..64 {
+            for x in 0..64 {
+                let idx = (y * 64 + x) * 3;
+                // Create blocks of different colors
+                pixels[idx] = if (x / 8 + y / 8) % 2 == 0 { 255 } else { 0 };
+                pixels[idx + 1] = if (x / 8) % 2 == 0 { 200 } else { 50 };
+                pixels[idx + 2] = if (y / 8) % 2 == 0 { 200 } else { 50 };
+            }
+        }
+        let analysis = analyze_image(&pixels, 64, 64, 85.0);
+
+        // At medium-high quality with high chroma, should prefer 444
+        let rec = select_codec_for_butteraugli(&analysis, 3.0);
+        // May be 444 or 420 depending on chroma analysis
+        assert!(rec.is_jpegli());
+    }
+
+    #[test]
+    fn test_codec_recommendation_methods() {
+        let jpegli = CodecRecommendation::Jpegli {
+            subsampling: Subsampling::S444,
+        };
+        let mozjpeg = CodecRecommendation::MozJpeg {
+            subsampling: Subsampling::S420,
+        };
+
+        assert!(jpegli.is_jpegli());
+        assert!(!jpegli.is_mozjpeg());
+        assert_eq!(jpegli.subsampling(), Subsampling::S444);
+
+        assert!(mozjpeg.is_mozjpeg());
+        assert!(!mozjpeg.is_jpegli());
+        assert_eq!(mozjpeg.subsampling(), Subsampling::S420);
+    }
+
+    #[test]
+    fn test_select_codec_auto() {
+        let pixels = vec![128u8; 64 * 64 * 3];
+        let analysis = analyze_image(&pixels, 64, 64, 75.0);
+
+        // Auto should default to BA=4.0 (medium quality)
+        let rec = select_codec_auto(&analysis);
+        assert!(rec.is_jpegli());
+        assert_eq!(rec.subsampling(), Subsampling::S420);
+    }
+
+    // DSSIM-based codec selection tests
+
+    #[test]
+    fn test_dssim_very_high_quality() {
+        // At very high quality (DSSIM <= 0.006), mozjpeg-max wins
+        let pixels = vec![128u8; 64 * 64 * 3];
+        let analysis = analyze_image(&pixels, 64, 64, 95.0);
+
+        let rec = select_codec_for_dssim(&analysis, 0.001);
+        assert!(rec.is_mozjpeg());
+        assert!(rec.is_mozjpeg_max());
+
+        let rec = select_codec_for_dssim(&analysis, 0.003);
+        assert!(rec.is_mozjpeg_max());
+
+        let rec = select_codec_for_dssim(&analysis, 0.005);
+        assert!(rec.is_mozjpeg_max());
+    }
+
+    #[test]
+    fn test_dssim_medium_high_quality() {
+        // At medium-high quality (DSSIM 0.006-0.015), mozjpeg-max still wins
+        let pixels = vec![128u8; 64 * 64 * 3];
+        let analysis = analyze_image(&pixels, 64, 64, 80.0);
+
+        let rec = select_codec_for_dssim(&analysis, 0.01);
+        assert!(rec.is_mozjpeg());
+        assert!(rec.is_mozjpeg_max());
+        assert_eq!(rec.subsampling(), Subsampling::S420);
+
+        let rec = select_codec_for_dssim(&analysis, 0.015);
+        assert!(rec.is_mozjpeg_max());
+    }
+
+    #[test]
+    fn test_dssim_low_quality() {
+        // At low quality (DSSIM > 0.015), baseline mozjpeg is competitive
+        let pixels = vec![128u8; 64 * 64 * 3];
+        let analysis = analyze_image(&pixels, 64, 64, 50.0);
+
+        let rec = select_codec_for_dssim(&analysis, 0.02);
+        assert!(rec.is_mozjpeg());
+        assert!(!rec.is_mozjpeg_max()); // Should be baseline mozjpeg
+
+        let rec = select_codec_for_dssim(&analysis, 0.03);
+        assert!(rec.is_mozjpeg());
+
+        let rec = select_codec_for_dssim(&analysis, 0.05);
+        assert!(rec.is_mozjpeg());
+    }
+
+    #[test]
+    fn test_dssim_vs_butteraugli_opposite_behavior() {
+        // Key insight: DSSIM and Butteraugli have opposite optimal codecs
+        // - Butteraugli: jpegli wins at high quality
+        // - DSSIM: mozjpeg-max wins at high quality
+
+        let pixels = vec![128u8; 64 * 64 * 3];
+        let analysis = analyze_image(&pixels, 64, 64, 85.0);
+
+        // High quality - Butteraugli prefers jpegli, DSSIM prefers mozjpeg-max
+        let ba_rec = select_codec_for_butteraugli(&analysis, 2.0);
+        let dssim_rec = select_codec_for_dssim(&analysis, 0.003);
+        assert!(ba_rec.is_jpegli());
+        assert!(dssim_rec.is_mozjpeg_max());
+
+        // Medium quality - both may prefer different codecs
+        let ba_rec = select_codec_for_butteraugli(&analysis, 4.0);
+        let dssim_rec = select_codec_for_dssim(&analysis, 0.02);
+        // BA=4 -> jpegli, DSSIM=0.02 -> mozjpeg (low quality uses baseline)
+        assert!(ba_rec.is_jpegli());
+        assert!(dssim_rec.is_mozjpeg());
+    }
+
+    #[test]
+    fn test_mozjpeg_max_recommendation() {
+        let mozjpeg_max = CodecRecommendation::MozJpegMax {
+            subsampling: Subsampling::S420,
+        };
+
+        assert!(mozjpeg_max.is_mozjpeg());
+        assert!(mozjpeg_max.is_mozjpeg_max());
+        assert!(!mozjpeg_max.is_jpegli());
+        assert_eq!(mozjpeg_max.subsampling(), Subsampling::S420);
     }
 }

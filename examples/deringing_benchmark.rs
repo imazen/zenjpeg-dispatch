@@ -79,7 +79,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Testing quality levels: {:?}\n", quality_levels);
 
     // Find test images
-    let corpus_dir = PathBuf::from("../codec-eval/codec-corpus/kodak");
+    let corpus_dir = PathBuf::from("../codec-eval/codec-corpus/CID22/CID22-512/training");
     let test_images: Vec<PathBuf> = if corpus_dir.exists() {
         let mut images: Vec<PathBuf> = fs::read_dir(&corpus_dir)?
             .filter_map(|e| e.ok())
@@ -90,7 +90,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Use first 4 images for quick benchmark
         images.into_iter().take(4).collect()
     } else {
-        println!("Kodak corpus not found at {:?}", corpus_dir);
+        println!("CID22 corpus not found at {:?}", corpus_dir);
         vec![]
     };
 
@@ -264,14 +264,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .quality(quality)
             .subsampling(mozjpeg_oxide::Subsampling::S420)
             .overshoot_deringing(true)
-            .optimize_scans(false)  // Baseline for compatibility
+            .optimize_scans(false) // Baseline for compatibility
             .encode_rgb(&pixels, width as u32, height as u32)?;
 
         let without_dering = mozjpeg_oxide::Encoder::max_compression()
             .quality(quality)
             .subsampling(mozjpeg_oxide::Subsampling::S420)
             .overshoot_deringing(false)
-            .optimize_scans(false)  // Baseline for compatibility
+            .optimize_scans(false) // Baseline for compatibility
             .encode_rgb(&pixels, width as u32, height as u32)?;
 
         let with_decoded = decode_jpeg(&with_dering)?;
@@ -333,14 +333,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .quality(quality)
             .subsampling(mozjpeg_oxide::Subsampling::S420)
             .overshoot_deringing(true)
-            .optimize_scans(false)  // Baseline for compatibility
+            .optimize_scans(false) // Baseline for compatibility
             .encode_rgb(&pixels, width as u32, height as u32)?;
 
         let without_dering = mozjpeg_oxide::Encoder::max_compression()
             .quality(quality)
             .subsampling(mozjpeg_oxide::Subsampling::S420)
             .overshoot_deringing(false)
-            .optimize_scans(false)  // Baseline for compatibility
+            .optimize_scans(false) // Baseline for compatibility
             .encode_rgb(&pixels, width as u32, height as u32)?;
 
         let with_decoded = decode_jpeg(&with_dering)?;

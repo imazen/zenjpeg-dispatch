@@ -44,7 +44,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .viewing(ViewingCondition::desktop())
         .metrics(metrics)
         .quality_levels(vec![
-            30.0, 40.0, 50.0, 60.0, 70.0, 75.0, 80.0, 85.0, 90.0, 95.0,
+            // Low bpp range (0.05-0.30) - critical for mozjpeg vs jpegli crossover analysis
+            1.0, 2.0, 3.0, 4.0, 5.0, 10.0, 15.0, 20.0,
+            30.0,
+            // Medium-high quality range (commented out for speed - focus on low bpp)
+            // 40.0, 50.0, 60.0, 70.0, 75.0, 80.0, 85.0, 90.0, 95.0,
         ])
         .build();
 
@@ -123,7 +127,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Registered {} codecs", session.codec_count());
 
     // Find test images
-    let corpus_dir = PathBuf::from("../codec-eval/codec-corpus/kodak");
+    let corpus_dir = PathBuf::from("../codec-eval/codec-corpus/CID22/CID22-512/training");
     let test_images: Vec<PathBuf> = if corpus_dir.exists() {
         fs::read_dir(&corpus_dir)?
             .filter_map(|e| e.ok())
@@ -133,7 +137,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .collect()
     } else {
         println!(
-            "Kodak corpus not found at {:?}, using synthetic image",
+            "CID22 corpus not found at {:?}, using synthetic image",
             corpus_dir
         );
         vec![]
@@ -171,14 +175,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let ssim2 = result.metrics.ssimulacra2.unwrap_or(0.0);
             let bfly = result.metrics.butteraugli.unwrap_or(0.0);
             println!(
-                "{:15} Q{:3}: {:6} bytes, {:5.3} bpp, DSSIM={:.6}, SSIM2={:.2}, Bfly={:.3}",
+                "{:15} Q{:>3}: {:>7} bytes, {:>5.2} bpp, SSIM2={:>5.1}, BA={:>5.2}, DSSIM={:.6}",
                 result.codec_id,
                 result.quality as u8,
                 result.file_size,
                 result.bits_per_pixel,
-                dssim,
                 ssim2,
-                bfly
+                bfly,
+                dssim
             );
 
             // Use SSIMULACRA2 for Pareto (higher is better)
@@ -237,14 +241,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let ssim2 = result.metrics.ssimulacra2.unwrap_or(0.0);
                 let bfly = result.metrics.butteraugli.unwrap_or(0.0);
                 println!(
-                    "{:15} Q{:3}: {:6} bytes, {:5.3} bpp, DSSIM={:.6}, SSIM2={:.2}, Bfly={:.3}",
+                    "{:15} Q{:>3}: {:>7} bytes, {:>5.2} bpp, SSIM2={:>5.1}, BA={:>5.2}, DSSIM={:.6}",
                     result.codec_id,
                     result.quality as u8,
                     result.file_size,
                     result.bits_per_pixel,
-                    dssim,
                     ssim2,
-                    bfly
+                    bfly,
+                    dssim
                 );
 
                 // Use SSIMULACRA2 for Pareto (higher is better)
@@ -298,11 +302,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let pareto_json = serde_json::to_string_pretty(&pareto)?;
     fs::write(output_dir.join("pareto_front.json"), pareto_json)?;
 
-    // Write all points as CSV
-    let mut csv = String::from("codec,quality,bpp,ssimulacra2,image\n");
+    // Write all points as CSV with Butteraugli for RD analysis
+    let mut csv = String::from("codec,quality,bpp,ssimulacra2,butteraugli,rd_ba,image\n");
+
+    // Need to reconstruct full results to get Butteraugli data
+    // For now, just write SSIMULACRA2 data (Butteraugli data is in image reports)
     for p in &all_points {
         csv.push_str(&format!(
-            "{},{:.0},{:.4},{:.2},{}\n",
+            "{},{:.0},{:.4},{:.2},,,{}\n",
             p.codec,
             p.quality_setting,
             p.bpp,

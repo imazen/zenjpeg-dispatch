@@ -106,7 +106,7 @@ Progressive encoding features:
 
 ### Automatic Encoder Selection
 
-Based on research across 382 BPP-matched comparisons (CLIC 2025 + Kodak):
+Based on research across 382 BPP-matched comparisons (CLIC 2025 + CID22):
 
 | Metric | mozjpeg wins | jpegli wins | Best default |
 |--------|-------------|-------------|--------------|

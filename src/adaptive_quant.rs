@@ -56,8 +56,8 @@ const LIMIT: f32 = 0.2;
 /// Input scaling factor (1/255 for 8-bit input).
 const K_INPUT_SCALING: f32 = 1.0 / 255.0;
 
-/// Inverse of ln(2).
-const K_INV_LOG2E: f32 = 0.6931471805599453;
+/// ln(2) - used for converting between log bases.
+const K_INV_LOG2E: f32 = std::f32::consts::LN_2;
 
 // Constants for ComputeMask
 const K_MASK_BASE: f32 = -0.74174993;
@@ -541,8 +541,7 @@ fn per_block_modulations(
             out_val += K_GAMMA * log_ratio;
 
             // 4. Final transform: 2^(out_val * log2(e)) * mul + add
-            const LOG2_E: f32 = 1.442695041;
-            let quant_field = (out_val * LOG2_E).exp2() * mul + add;
+            let quant_field = (out_val * std::f32::consts::LOG2_E).exp2() * mul + add;
 
             aq_map[block_idx] = quant_field;
         }

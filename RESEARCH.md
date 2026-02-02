@@ -192,7 +192,6 @@ From codec-eval documentation:
 
 ### Test Data
 - C++ instrumented outputs: `/home/lilith/work/jpegli/*.testdata`
-- Kodak corpus: `codec-corpus/kodak/`
 - CID22 dataset: See jpegli-rs CLAUDE.md
 
 ## Session Log
@@ -208,7 +207,7 @@ From codec-eval documentation:
 
 **Created `find-outliers` tool** in `codec-eval/crates/codec-compare/` to scan corpora and identify encoder-sensitive images.
 
-**Kodak corpus results (24 images, Q50/70/85/95):**
+**24-image corpus results (Q50/70/85/95):**
 
 | Metric | C jpegli | C mozjpeg |
 |--------|----------|-----------|
@@ -220,9 +219,9 @@ From codec-eval documentation:
 1. jpegli dominates on Butteraugli quality at ALL quality levels tested
 2. At Q95, jpegli achieves ~50% lower Butteraugli at similar file size
 3. The advantage increases with quality level
-4. No images in Kodak favor mozjpeg on perceptual quality
+4. No images in the 24-image corpus favor mozjpeg on perceptual quality
 
-**Example: kodak/5.png**
+**Example: image 5**
 ```
 Q  | moz bpp  butter | jpegli bpp  butter
 50 |   1.07    4.47  |   1.46      3.31
@@ -251,7 +250,7 @@ Q  | moz bpp  butter | jpegli bpp  butter | Efficiency ratio
 
 Q values don't mean the same thing across encoders. Created `rd-compare` tool to compare at matched file sizes (fair comparison).
 
-**Rate-Distortion comparison at matched BPP (Kodak, 24 images):**
+**Rate-Distortion comparison at matched BPP (24-image corpus):**
 
 | BPP | mozjpeg wins | jpegli wins |
 |-----|--------------|-------------|
@@ -283,11 +282,11 @@ This aligns with the research notes about quality-dependent Pareto fronts!
 | 1.50 | 20% | **80%** |
 | 2.00 | 30% | **70%** |
 
-**Confirmed: crossover at ~0.75-1.0 bpp across both Kodak and CID22**
+**Confirmed: crossover at ~0.75-1.0 bpp across both test corpora**
 
 ### Image Characteristic Analysis (2024-12-26)
 
-Analyzed Kodak images to find what characteristics favor each encoder:
+Analyzed 24-image corpus to find what characteristics favor each encoder:
 
 **mozjpeg-favoring images (at low bpp):**
 | Image | Flat% | Edges | Detail% |
@@ -338,7 +337,7 @@ Created comprehensive encoder comparison tools in `codec-eval/crates/codec-compa
 
 **Dataset:**
 - CLIC 2025 validation: 32 images × 14 quality levels × 2 encoders = 896 encodes
-- Kodak: 24 images × 14 quality levels × 2 encoders = 672 encodes
+- 24-image corpus: 24 images × 14 quality levels × 2 encoders = 672 encodes
 - Combined: 56 images, 382 significant BPP-matched comparisons
 
 **Key Findings (BPP-based, 5% margin threshold):**
@@ -369,7 +368,7 @@ fn predict_encoder(flat_block_pct: f64, edge_strength: f64,
 
 **Accuracy by Corpus:**
 - CLIC 2025: 87.1%
-- Kodak: 85.9%
+- 24-image corpus: 85.9%
 - Combined: 86.6%
 
 **Image Category Analysis:**
@@ -474,7 +473,7 @@ Extended `build-predictor` to evaluate winners using all three metrics:
 2. Using `jpegli::icc::decode_jpeg_with_icc()` for proper XYB decoding (the `Decoder::apply_icc(true)` method has bugs)
 3. Updating codec-compare to use local jpegli-rs crate with `cms-lcms2` feature
 
-**Kodak corpus results (24 images, Q30-Q95, BPP-matched comparison):**
+**24-image corpus results (Q30-Q95, BPP-matched comparison):**
 
 **Butteraugli (lower is better):**
 | BPP | mozjpeg | jpegli | jpegli-xyb |
