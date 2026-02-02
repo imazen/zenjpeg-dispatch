@@ -19,3 +19,8 @@ comparison_outputs/
 # Benchmark outputs
 benchmark_results/
 reduced_corpus/
+
+# Large generated data (heuristic benchmark images/caches)
+heuristic_outputs/images/
+heuristic_outputs_backup_*/
+*.o
