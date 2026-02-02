@@ -13,10 +13,7 @@ mod common;
 /// Check if cjpegli is available
 fn cjpegli_available() -> bool {
     // cjpegli doesn't have --version, use -h which always succeeds
-    Command::new("cjpegli")
-        .arg("-h")
-        .output()
-        .is_ok()
+    Command::new("cjpegli").arg("-h").output().is_ok()
 }
 
 /// Encode with cjpegli via subprocess
@@ -50,9 +47,9 @@ fn create_test_png() -> Option<NamedTempFile> {
 
     for y in 0..height {
         for x in 0..width {
-            pixels.push((x * 4) as u8);  // R
-            pixels.push((y * 4) as u8);  // G
-            pixels.push(128u8);          // B
+            pixels.push((x * 4) as u8); // R
+            pixels.push((y * 4) as u8); // G
+            pixels.push(128u8); // B
         }
     }
 
@@ -112,10 +109,10 @@ fn test_file_size_comparison() {
         reader.next_frame(&mut pixels).unwrap();
         let info = reader.info();
 
-        let encoder = zenjpeg::Encoder::new()
-            .quality(zenjpeg::Quality::Standard(quality));
+        let encoder = zenjpeg::Encoder::new().quality(zenjpeg::Quality::Standard(quality));
 
-        let rust_jpeg = match encoder.encode_rgb(&pixels, info.width as usize, info.height as usize) {
+        let rust_jpeg = match encoder.encode_rgb(&pixels, info.width as usize, info.height as usize)
+        {
             Ok(data) => data,
             Err(e) => {
                 eprintln!("SKIP: zenjpeg encoding failed for Q{}: {:?}", quality, e);
@@ -137,7 +134,8 @@ fn test_file_size_comparison() {
         assert!(
             ratio > 0.5 && ratio < 2.0,
             "Q{}: zenjpeg file size ratio {:.3} is outside acceptable range",
-            quality, ratio
+            quality,
+            ratio
         );
     }
 }
@@ -169,17 +167,23 @@ fn test_both_produce_valid_jpeg() {
     reader.next_frame(&mut pixels).unwrap();
     let info = reader.info();
 
-    let encoder = zenjpeg::Encoder::new()
-        .quality(zenjpeg::Quality::Standard(85));
-    let rust_jpeg = encoder.encode_rgb(&pixels, info.width as usize, info.height as usize)
+    let encoder = zenjpeg::Encoder::new().quality(zenjpeg::Quality::Standard(85));
+    let rust_jpeg = encoder
+        .encode_rgb(&pixels, info.width as usize, info.height as usize)
         .expect("zenjpeg should succeed");
 
     // Both should be decodable
     let mut cpp_decoder = jpeg_decoder::Decoder::new(std::io::Cursor::new(&cpp_jpeg));
     let mut rust_decoder = jpeg_decoder::Decoder::new(std::io::Cursor::new(&rust_jpeg));
 
-    assert!(cpp_decoder.decode().is_ok(), "cjpegli output should be decodable");
-    assert!(rust_decoder.decode().is_ok(), "zenjpeg output should be decodable");
+    assert!(
+        cpp_decoder.decode().is_ok(),
+        "cjpegli output should be decodable"
+    );
+    assert!(
+        rust_decoder.decode().is_ok(),
+        "zenjpeg output should be decodable"
+    );
 
     println!("✓ Both cjpegli and zenjpeg produce valid, decodable JPEGs");
 }

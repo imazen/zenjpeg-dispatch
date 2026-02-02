@@ -32,26 +32,126 @@ pub struct QualityMapping {
 /// Tested on typical photographic images. Actual results vary by image content.
 /// At low qualities (<Q20), mozjpeg produces severely degraded images.
 pub const MOZJPEG_MAPPINGS: &[QualityMapping] = &[
-    QualityMapping { quality: 1, bpp: 0.10, ssim2: 10.0, butteraugli: 65.0 },
-    QualityMapping { quality: 5, bpp: 0.12, ssim2: 25.0, butteraugli: 35.0 },
-    QualityMapping { quality: 10, bpp: 0.14, ssim2: 40.0, butteraugli: 20.0 },
-    QualityMapping { quality: 15, bpp: 0.16, ssim2: 50.0, butteraugli: 15.0 },
-    QualityMapping { quality: 20, bpp: 0.18, ssim2: 55.0, butteraugli: 12.0 },
-    QualityMapping { quality: 25, bpp: 0.22, ssim2: 60.0, butteraugli: 9.0 },
-    QualityMapping { quality: 30, bpp: 0.26, ssim2: 65.0, butteraugli: 7.5 },
-    QualityMapping { quality: 35, bpp: 0.32, ssim2: 68.0, butteraugli: 6.0 },
-    QualityMapping { quality: 40, bpp: 0.38, ssim2: 72.0, butteraugli: 5.0 },
-    QualityMapping { quality: 45, bpp: 0.45, ssim2: 75.0, butteraugli: 4.0 },
-    QualityMapping { quality: 50, bpp: 0.54, ssim2: 78.0, butteraugli: 3.2 },
-    QualityMapping { quality: 55, bpp: 0.65, ssim2: 80.0, butteraugli: 2.6 },
-    QualityMapping { quality: 60, bpp: 0.78, ssim2: 82.0, butteraugli: 2.1 },
-    QualityMapping { quality: 65, bpp: 0.95, ssim2: 84.0, butteraugli: 1.7 },
-    QualityMapping { quality: 70, bpp: 1.15, ssim2: 86.0, butteraugli: 1.4 },
-    QualityMapping { quality: 75, bpp: 1.40, ssim2: 88.0, butteraugli: 1.1 },
-    QualityMapping { quality: 80, bpp: 1.75, ssim2: 90.0, butteraugli: 0.9 },
-    QualityMapping { quality: 85, bpp: 2.25, ssim2: 92.0, butteraugli: 0.7 },
-    QualityMapping { quality: 90, bpp: 3.00, ssim2: 94.0, butteraugli: 0.5 },
-    QualityMapping { quality: 95, bpp: 4.50, ssim2: 96.0, butteraugli: 0.3 },
+    QualityMapping {
+        quality: 1,
+        bpp: 0.10,
+        ssim2: 10.0,
+        butteraugli: 65.0,
+    },
+    QualityMapping {
+        quality: 5,
+        bpp: 0.12,
+        ssim2: 25.0,
+        butteraugli: 35.0,
+    },
+    QualityMapping {
+        quality: 10,
+        bpp: 0.14,
+        ssim2: 40.0,
+        butteraugli: 20.0,
+    },
+    QualityMapping {
+        quality: 15,
+        bpp: 0.16,
+        ssim2: 50.0,
+        butteraugli: 15.0,
+    },
+    QualityMapping {
+        quality: 20,
+        bpp: 0.18,
+        ssim2: 55.0,
+        butteraugli: 12.0,
+    },
+    QualityMapping {
+        quality: 25,
+        bpp: 0.22,
+        ssim2: 60.0,
+        butteraugli: 9.0,
+    },
+    QualityMapping {
+        quality: 30,
+        bpp: 0.26,
+        ssim2: 65.0,
+        butteraugli: 7.5,
+    },
+    QualityMapping {
+        quality: 35,
+        bpp: 0.32,
+        ssim2: 68.0,
+        butteraugli: 6.0,
+    },
+    QualityMapping {
+        quality: 40,
+        bpp: 0.38,
+        ssim2: 72.0,
+        butteraugli: 5.0,
+    },
+    QualityMapping {
+        quality: 45,
+        bpp: 0.45,
+        ssim2: 75.0,
+        butteraugli: 4.0,
+    },
+    QualityMapping {
+        quality: 50,
+        bpp: 0.54,
+        ssim2: 78.0,
+        butteraugli: 3.2,
+    },
+    QualityMapping {
+        quality: 55,
+        bpp: 0.65,
+        ssim2: 80.0,
+        butteraugli: 2.6,
+    },
+    QualityMapping {
+        quality: 60,
+        bpp: 0.78,
+        ssim2: 82.0,
+        butteraugli: 2.1,
+    },
+    QualityMapping {
+        quality: 65,
+        bpp: 0.95,
+        ssim2: 84.0,
+        butteraugli: 1.7,
+    },
+    QualityMapping {
+        quality: 70,
+        bpp: 1.15,
+        ssim2: 86.0,
+        butteraugli: 1.4,
+    },
+    QualityMapping {
+        quality: 75,
+        bpp: 1.40,
+        ssim2: 88.0,
+        butteraugli: 1.1,
+    },
+    QualityMapping {
+        quality: 80,
+        bpp: 1.75,
+        ssim2: 90.0,
+        butteraugli: 0.9,
+    },
+    QualityMapping {
+        quality: 85,
+        bpp: 2.25,
+        ssim2: 92.0,
+        butteraugli: 0.7,
+    },
+    QualityMapping {
+        quality: 90,
+        bpp: 3.00,
+        ssim2: 94.0,
+        butteraugli: 0.5,
+    },
+    QualityMapping {
+        quality: 95,
+        bpp: 4.50,
+        ssim2: 96.0,
+        butteraugli: 0.3,
+    },
 ];
 
 /// Jpegli quality-to-metrics mapping table (empirical data)
@@ -61,27 +161,127 @@ pub const MOZJPEG_MAPPINGS: &[QualityMapping] = &[
 /// Butteraugli scores of 7-10 instead of degrading to 15-65 like mozjpeg.
 pub const JPEGLI_MAPPINGS: &[QualityMapping] = &[
     // Q1-Q30: Jpegli quality floor region (~0.24-0.33 bpp)
-    QualityMapping { quality: 1, bpp: 0.24, ssim2: 60.0, butteraugli: 10.0 },
-    QualityMapping { quality: 5, bpp: 0.25, ssim2: 62.0, butteraugli: 9.5 },
-    QualityMapping { quality: 10, bpp: 0.26, ssim2: 64.0, butteraugli: 9.0 },
-    QualityMapping { quality: 15, bpp: 0.27, ssim2: 66.0, butteraugli: 8.5 },
-    QualityMapping { quality: 20, bpp: 0.29, ssim2: 68.0, butteraugli: 8.0 },
-    QualityMapping { quality: 25, bpp: 0.31, ssim2: 70.0, butteraugli: 7.5 },
-    QualityMapping { quality: 30, bpp: 0.33, ssim2: 72.0, butteraugli: 7.0 },
+    QualityMapping {
+        quality: 1,
+        bpp: 0.24,
+        ssim2: 60.0,
+        butteraugli: 10.0,
+    },
+    QualityMapping {
+        quality: 5,
+        bpp: 0.25,
+        ssim2: 62.0,
+        butteraugli: 9.5,
+    },
+    QualityMapping {
+        quality: 10,
+        bpp: 0.26,
+        ssim2: 64.0,
+        butteraugli: 9.0,
+    },
+    QualityMapping {
+        quality: 15,
+        bpp: 0.27,
+        ssim2: 66.0,
+        butteraugli: 8.5,
+    },
+    QualityMapping {
+        quality: 20,
+        bpp: 0.29,
+        ssim2: 68.0,
+        butteraugli: 8.0,
+    },
+    QualityMapping {
+        quality: 25,
+        bpp: 0.31,
+        ssim2: 70.0,
+        butteraugli: 7.5,
+    },
+    QualityMapping {
+        quality: 30,
+        bpp: 0.33,
+        ssim2: 72.0,
+        butteraugli: 7.0,
+    },
     // Q35+: Normal operation
-    QualityMapping { quality: 35, bpp: 0.38, ssim2: 74.0, butteraugli: 5.5 },
-    QualityMapping { quality: 40, bpp: 0.44, ssim2: 76.0, butteraugli: 4.5 },
-    QualityMapping { quality: 45, bpp: 0.52, ssim2: 78.0, butteraugli: 3.5 },
-    QualityMapping { quality: 50, bpp: 0.62, ssim2: 80.0, butteraugli: 2.8 },
-    QualityMapping { quality: 55, bpp: 0.74, ssim2: 82.0, butteraugli: 2.2 },
-    QualityMapping { quality: 60, bpp: 0.88, ssim2: 84.0, butteraugli: 1.8 },
-    QualityMapping { quality: 65, bpp: 1.05, ssim2: 86.0, butteraugli: 1.4 },
-    QualityMapping { quality: 70, bpp: 1.25, ssim2: 88.0, butteraugli: 1.1 },
-    QualityMapping { quality: 75, bpp: 1.50, ssim2: 90.0, butteraugli: 0.85 },
-    QualityMapping { quality: 80, bpp: 1.85, ssim2: 92.0, butteraugli: 0.65 },
-    QualityMapping { quality: 85, bpp: 2.35, ssim2: 94.0, butteraugli: 0.50 },
-    QualityMapping { quality: 90, bpp: 3.10, ssim2: 96.0, butteraugli: 0.35 },
-    QualityMapping { quality: 95, bpp: 4.60, ssim2: 98.0, butteraugli: 0.20 },
+    QualityMapping {
+        quality: 35,
+        bpp: 0.38,
+        ssim2: 74.0,
+        butteraugli: 5.5,
+    },
+    QualityMapping {
+        quality: 40,
+        bpp: 0.44,
+        ssim2: 76.0,
+        butteraugli: 4.5,
+    },
+    QualityMapping {
+        quality: 45,
+        bpp: 0.52,
+        ssim2: 78.0,
+        butteraugli: 3.5,
+    },
+    QualityMapping {
+        quality: 50,
+        bpp: 0.62,
+        ssim2: 80.0,
+        butteraugli: 2.8,
+    },
+    QualityMapping {
+        quality: 55,
+        bpp: 0.74,
+        ssim2: 82.0,
+        butteraugli: 2.2,
+    },
+    QualityMapping {
+        quality: 60,
+        bpp: 0.88,
+        ssim2: 84.0,
+        butteraugli: 1.8,
+    },
+    QualityMapping {
+        quality: 65,
+        bpp: 1.05,
+        ssim2: 86.0,
+        butteraugli: 1.4,
+    },
+    QualityMapping {
+        quality: 70,
+        bpp: 1.25,
+        ssim2: 88.0,
+        butteraugli: 1.1,
+    },
+    QualityMapping {
+        quality: 75,
+        bpp: 1.50,
+        ssim2: 90.0,
+        butteraugli: 0.85,
+    },
+    QualityMapping {
+        quality: 80,
+        bpp: 1.85,
+        ssim2: 92.0,
+        butteraugli: 0.65,
+    },
+    QualityMapping {
+        quality: 85,
+        bpp: 2.35,
+        ssim2: 94.0,
+        butteraugli: 0.50,
+    },
+    QualityMapping {
+        quality: 90,
+        bpp: 3.10,
+        ssim2: 96.0,
+        butteraugli: 0.35,
+    },
+    QualityMapping {
+        quality: 95,
+        bpp: 4.60,
+        ssim2: 98.0,
+        butteraugli: 0.20,
+    },
 ];
 
 /// Get the mapping table for a specific encoder
@@ -174,12 +374,13 @@ pub fn quality_for_target_butteraugli(encoder: EncoderType, target_butteraugli: 
 
     // Find bracketing entries (butteraugli decreases as quality increases)
     for i in 0..mappings.len() - 1 {
-        let high_q = &mappings[i];     // Lower quality, higher butteraugli
-        let low_q = &mappings[i + 1];  // Higher quality, lower butteraugli
+        let high_q = &mappings[i]; // Lower quality, higher butteraugli
+        let low_q = &mappings[i + 1]; // Higher quality, lower butteraugli
 
         if target_butteraugli <= high_q.butteraugli && target_butteraugli >= low_q.butteraugli {
             // Linear interpolation
-            let t = (high_q.butteraugli - target_butteraugli) / (high_q.butteraugli - low_q.butteraugli);
+            let t = (high_q.butteraugli - target_butteraugli)
+                / (high_q.butteraugli - low_q.butteraugli);
             let q = high_q.quality as f32 + t * (low_q.quality as f32 - high_q.quality as f32);
             return q.round() as u8;
         }
@@ -207,7 +408,8 @@ pub fn estimate_bpp(encoder: EncoderType, quality: u8) -> f32 {
         let high = &mappings[i + 1];
 
         if quality >= low.quality && quality <= high.quality {
-            let t = (quality as f32 - low.quality as f32) / (high.quality as f32 - low.quality as f32);
+            let t =
+                (quality as f32 - low.quality as f32) / (high.quality as f32 - low.quality as f32);
             return low.bpp + t * (high.bpp - low.bpp);
         }
     }
@@ -234,7 +436,8 @@ pub fn estimate_ssim2(encoder: EncoderType, quality: u8) -> f32 {
         let high = &mappings[i + 1];
 
         if quality >= low.quality && quality <= high.quality {
-            let t = (quality as f32 - low.quality as f32) / (high.quality as f32 - low.quality as f32);
+            let t =
+                (quality as f32 - low.quality as f32) / (high.quality as f32 - low.quality as f32);
             return low.ssim2 + t * (high.ssim2 - low.ssim2);
         }
     }
@@ -305,11 +508,19 @@ mod tests {
     fn test_estimate_bpp() {
         // Q50 should be around 0.5-0.7 bpp
         let bpp = estimate_bpp(EncoderType::Mozjpeg, 50);
-        assert!(bpp >= 0.4 && bpp <= 0.7, "BPP {} for Q50 should be 0.4-0.7", bpp);
+        assert!(
+            bpp >= 0.4 && bpp <= 0.7,
+            "BPP {} for Q50 should be 0.4-0.7",
+            bpp
+        );
 
         // Jpegli Q1 should be at floor (~0.24 bpp)
         let bpp = estimate_bpp(EncoderType::Jpegli, 1);
-        assert!(bpp >= 0.20 && bpp <= 0.30, "Jpegli Q1 BPP {} should be ~0.24", bpp);
+        assert!(
+            bpp >= 0.20 && bpp <= 0.30,
+            "Jpegli Q1 BPP {} should be ~0.24",
+            bpp
+        );
     }
 
     #[test]
@@ -352,7 +563,10 @@ mod tests {
             assert!(low.quality < high.quality, "Quality should increase");
             assert!(low.bpp < high.bpp, "BPP should increase with quality");
             assert!(low.ssim2 < high.ssim2, "SSIM2 should increase with quality");
-            assert!(low.butteraugli > high.butteraugli, "Butteraugli should decrease with quality");
+            assert!(
+                low.butteraugli > high.butteraugli,
+                "Butteraugli should decrease with quality"
+            );
         }
 
         // Same for jpegli
@@ -362,7 +576,10 @@ mod tests {
             assert!(low.quality < high.quality, "Quality should increase");
             assert!(low.bpp <= high.bpp, "BPP should increase with quality");
             assert!(low.ssim2 < high.ssim2, "SSIM2 should increase with quality");
-            assert!(low.butteraugli > high.butteraugli, "Butteraugli should decrease with quality");
+            assert!(
+                low.butteraugli > high.butteraugli,
+                "Butteraugli should decrease with quality"
+            );
         }
     }
 }

@@ -8,7 +8,7 @@
 //! Run with: cargo run --example verify_decoders
 
 use std::process::Command;
-use zenjpeg::{Encoder, Quality, ScanScript, ScanInfo};
+use zenjpeg::{Encoder, Quality, ScanInfo, ScanScript};
 
 struct DecoderResult {
     name: &'static str,
@@ -18,8 +18,16 @@ struct DecoderResult {
 
 fn test_jpeg_decoder(data: &[u8]) -> DecoderResult {
     match jpeg_decoder::Decoder::new(data).decode() {
-        Ok(_) => DecoderResult { name: "jpeg_decoder", success: true, error: None },
-        Err(e) => DecoderResult { name: "jpeg_decoder", success: false, error: Some(format!("{:?}", e)) },
+        Ok(_) => DecoderResult {
+            name: "jpeg_decoder",
+            success: true,
+            error: None,
+        },
+        Err(e) => DecoderResult {
+            name: "jpeg_decoder",
+            success: false,
+            error: Some(format!("{:?}", e)),
+        },
     }
 }
 
@@ -30,13 +38,21 @@ fn test_djpeg(data: &[u8], temp_path: &str) -> DecoderResult {
         .output();
 
     match output {
-        Ok(o) if o.status.success() => DecoderResult { name: "djpeg", success: true, error: None },
+        Ok(o) if o.status.success() => DecoderResult {
+            name: "djpeg",
+            success: true,
+            error: None,
+        },
         Ok(o) => DecoderResult {
             name: "djpeg",
             success: false,
-            error: Some(String::from_utf8_lossy(&o.stderr).to_string())
+            error: Some(String::from_utf8_lossy(&o.stderr).to_string()),
         },
-        Err(e) => DecoderResult { name: "djpeg", success: false, error: Some(format!("{}", e)) },
+        Err(e) => DecoderResult {
+            name: "djpeg",
+            success: false,
+            error: Some(format!("{}", e)),
+        },
     }
 }
 
@@ -47,13 +63,21 @@ fn test_imagemagick(data: &[u8], temp_path: &str) -> DecoderResult {
         .output();
 
     match output {
-        Ok(o) if o.status.success() => DecoderResult { name: "ImageMagick", success: true, error: None },
+        Ok(o) if o.status.success() => DecoderResult {
+            name: "ImageMagick",
+            success: true,
+            error: None,
+        },
         Ok(o) => DecoderResult {
             name: "ImageMagick",
             success: false,
-            error: Some(String::from_utf8_lossy(&o.stderr).to_string())
+            error: Some(String::from_utf8_lossy(&o.stderr).to_string()),
         },
-        Err(e) => DecoderResult { name: "ImageMagick", success: false, error: Some(format!("{}", e)) },
+        Err(e) => DecoderResult {
+            name: "ImageMagick",
+            success: false,
+            error: Some(format!("{}", e)),
+        },
     }
 }
 
@@ -156,9 +180,30 @@ fn main() {
             }
         }
         let scans = vec![
-            ScanInfo { comps_in_scan: 1, component_index: [0,0,0,0], ss: 0, se: 0, ah: 0, al: 0 },
-            ScanInfo { comps_in_scan: 1, component_index: [0,0,0,0], ss: 1, se: 63, ah: 0, al: 1 },
-            ScanInfo { comps_in_scan: 1, component_index: [0,0,0,0], ss: 1, se: 63, ah: 1, al: 0 },
+            ScanInfo {
+                comps_in_scan: 1,
+                component_index: [0, 0, 0, 0],
+                ss: 0,
+                se: 0,
+                ah: 0,
+                al: 0,
+            },
+            ScanInfo {
+                comps_in_scan: 1,
+                component_index: [0, 0, 0, 0],
+                ss: 1,
+                se: 63,
+                ah: 0,
+                al: 1,
+            },
+            ScanInfo {
+                comps_in_scan: 1,
+                component_index: [0, 0, 0, 0],
+                ss: 1,
+                se: 63,
+                ah: 1,
+                al: 0,
+            },
         ];
         let jpeg = Encoder::new()
             .quality(Quality::Standard(90))
@@ -177,9 +222,30 @@ fn main() {
     {
         let pixels = vec![128u8; 64];
         let scans = vec![
-            ScanInfo { comps_in_scan: 1, component_index: [0,0,0,0], ss: 0, se: 0, ah: 0, al: 0 },
-            ScanInfo { comps_in_scan: 1, component_index: [0,0,0,0], ss: 1, se: 63, ah: 0, al: 1 },
-            ScanInfo { comps_in_scan: 1, component_index: [0,0,0,0], ss: 1, se: 63, ah: 1, al: 0 },
+            ScanInfo {
+                comps_in_scan: 1,
+                component_index: [0, 0, 0, 0],
+                ss: 0,
+                se: 0,
+                ah: 0,
+                al: 0,
+            },
+            ScanInfo {
+                comps_in_scan: 1,
+                component_index: [0, 0, 0, 0],
+                ss: 1,
+                se: 63,
+                ah: 0,
+                al: 1,
+            },
+            ScanInfo {
+                comps_in_scan: 1,
+                component_index: [0, 0, 0, 0],
+                ss: 1,
+                se: 63,
+                ah: 1,
+                al: 0,
+            },
         ];
         let jpeg = Encoder::new()
             .quality(Quality::Standard(90))

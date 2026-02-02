@@ -20,7 +20,10 @@ fn main() {
 
         let iterations = if width >= 2048 { 5 } else { 10 };
 
-        println!("\n{}x{} image, Q85, {} iterations:", width, height, iterations);
+        println!(
+            "\n{}x{} image, Q85, {} iterations:",
+            width, height, iterations
+        );
 
         // Mozjpeg strategy
         let start = Instant::now();

@@ -34,7 +34,12 @@ fn main() {
             .overshoot_deringing(use_deringing)
             .encode_rgb(&rgb, width as u32, height as u32)
             .unwrap();
-        println!("  Q{}: {} bytes (deringing={})", q, jpeg.len(), use_deringing);
+        println!(
+            "  Q{}: {} bytes (deringing={})",
+            q,
+            jpeg.len(),
+            use_deringing
+        );
     }
 
     println!("\nVia zenjpeg delegation:");

@@ -367,7 +367,10 @@ impl AdaptiveConfig {
     /// Check if this config requires jpegli backend
     pub fn requires_jpegli(&self) -> bool {
         matches!(self.color_space, ColorSpaceConfig::XYB)
-            || matches!(self.quantization.adaptive_quant, AdaptiveQuantMode::PerBlock | AdaptiveQuantMode::HybridTrellis)
+            || matches!(
+                self.quantization.adaptive_quant,
+                AdaptiveQuantMode::PerBlock | AdaptiveQuantMode::HybridTrellis
+            )
     }
 
     /// Check if this config requires mozjpeg backend
@@ -437,10 +440,16 @@ mod tests {
     #[test]
     fn test_presets() {
         let max_comp = AdaptiveConfig::max_compression();
-        assert!(matches!(max_comp.quantization.trellis, TrellisMode::AcAndDc));
+        assert!(matches!(
+            max_comp.quantization.trellis,
+            TrellisMode::AcAndDc
+        ));
 
         let max_qual = AdaptiveConfig::max_quality();
-        assert!(matches!(max_qual.quantization.trellis, TrellisMode::Disabled));
+        assert!(matches!(
+            max_qual.quantization.trellis,
+            TrellisMode::Disabled
+        ));
 
         let fastest = AdaptiveConfig::fastest();
         assert!(!fastest.entropy.optimize_huffman);
@@ -456,11 +465,17 @@ mod tests {
         let trellis = AdaptiveConfig::default()
             .trellis(TrellisMode::AcAndDc)
             .adaptive_quant(AdaptiveQuantMode::Disabled);
-        assert!(matches!(trellis.effective_backend(), EncoderBackend::Mozjpeg));
+        assert!(matches!(
+            trellis.effective_backend(),
+            EncoderBackend::Mozjpeg
+        ));
 
         // Explicit backend overrides auto
         let explicit = AdaptiveConfig::default().backend(EncoderBackend::Mozjpeg);
-        assert!(matches!(explicit.effective_backend(), EncoderBackend::Mozjpeg));
+        assert!(matches!(
+            explicit.effective_backend(),
+            EncoderBackend::Mozjpeg
+        ));
     }
 
     #[test]
@@ -473,7 +488,13 @@ mod tests {
             .backend(EncoderBackend::BestOf);
 
         assert_eq!(config.quality, 75);
-        assert!(matches!(config.subsampling, SubsamplingConfig::Adaptive { .. }));
-        assert!(matches!(config.entropy.progressive, ProgressiveMode::Standard));
+        assert!(matches!(
+            config.subsampling,
+            SubsamplingConfig::Adaptive { .. }
+        ));
+        assert!(matches!(
+            config.entropy.progressive,
+            ProgressiveMode::Standard
+        ));
     }
 }

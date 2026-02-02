@@ -146,10 +146,10 @@ pub fn select_sa_table_exact(quality: u8) -> Option<&'static [u16; 64]> {
 /// Select best compression SA table based on quality level.
 pub fn select_sa_table_compress(quality: u8) -> &'static [u16; 64] {
     match quality {
-        0..=42 => &SA_LUMA_Q35,       // No compression variant at Q35
+        0..=42 => &SA_LUMA_Q35, // No compression variant at Q35
         43..=62 => &SA_LUMA_Q50_COMPRESS,
         63..=84 => &SA_LUMA_Q75_COMPRESS,
-        85.. => &SA_LUMA_Q95,         // No compression variant at Q95
+        85.. => &SA_LUMA_Q95, // No compression variant at Q95
     }
 }
 
@@ -216,10 +216,10 @@ pub fn get_interpolated_sa_table(quality: u8) -> [u16; 64] {
         // At Q95: scale = 200 - 2*95 = 10
         // At Q100: scale = 200 - 2*100 = 0 (would be all 1s)
         // Ratio: (200-2*q) / (200-2*95) = (200-2*q) / 10
-        let base_scale = 200.0 - 2.0 * Q95;  // 10
-        let new_scale = 200.0 - 2.0 * q;      // 0 at Q100
-        let scale = new_scale / base_scale;   // 0 at Q100
-        scale_sa_table(&SA_LUMA_Q95, scale.max(0.01))  // Don't go to 0
+        let base_scale = 200.0 - 2.0 * Q95; // 10
+        let new_scale = 200.0 - 2.0 * q; // 0 at Q100
+        let scale = new_scale / base_scale; // 0 at Q100
+        scale_sa_table(&SA_LUMA_Q95, scale.max(0.01)) // Don't go to 0
     }
 }
 
@@ -250,8 +250,14 @@ mod tests {
         for i in 0..64 {
             let min = SA_LUMA_Q50[i].min(SA_LUMA_Q75[i]);
             let max = SA_LUMA_Q50[i].max(SA_LUMA_Q75[i]);
-            assert!(q62[i] >= min && q62[i] <= max,
-                "q62[{}] = {}, expected between {} and {}", i, q62[i], min, max);
+            assert!(
+                q62[i] >= min && q62[i] <= max,
+                "q62[{}] = {}, expected between {} and {}",
+                i,
+                q62[i],
+                min,
+                max
+            );
         }
     }
 

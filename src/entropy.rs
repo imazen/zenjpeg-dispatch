@@ -51,7 +51,10 @@ impl BitWriter {
     #[inline]
     pub fn write_bits(&mut self, value: u32, count: u8) {
         if std::env::var("DEBUG_BITS").is_ok() {
-            let bits: String = (0..count).rev().map(|i| if (value >> i) & 1 == 1 { '1' } else { '0' }).collect();
+            let bits: String = (0..count)
+                .rev()
+                .map(|i| if (value >> i) & 1 == 1 { '1' } else { '0' })
+                .collect();
             eprintln!("    WRITE {} bits: {}", count, bits);
         }
         self.bit_buffer = (self.bit_buffer << count) | (value & ((1 << count) - 1));
@@ -451,7 +454,10 @@ impl ProgressiveEncoder {
         let debug = std::env::var("DEBUG_REFINE").is_ok();
 
         if debug {
-            eprintln!("encode_ac_refine: ss={}, se={}, ah={}, al={}", ss, se, ah, al);
+            eprintln!(
+                "encode_ac_refine: ss={}, se={}, ah={}, al={}",
+                ss, se, ah, al
+            );
         }
 
         for k in ss..=se {
@@ -470,7 +476,10 @@ impl ProgressiveEncoder {
                 let correction_bit = ((abs_coef >> al) & 1) as u32;
                 pending_bits.push(correction_bit);
                 if debug {
-                    eprintln!("  k={}: prev non-zero coef={}, queue correction bit {}", k, coef, correction_bit);
+                    eprintln!(
+                        "  k={}: prev non-zero coef={}, queue correction bit {}",
+                        k, coef, correction_bit
+                    );
                 }
             } else if (abs_coef >> al) == 1 {
                 // New non-zero coefficient
@@ -487,12 +496,21 @@ impl ProgressiveEncoder {
 
                 // Emit ZRL for runs of 16
                 if debug && run >= 16 {
-                    eprintln!("  Before ZRL loop: run={}, pending_bits.len()={}", run, pending_bits.len());
+                    eprintln!(
+                        "  Before ZRL loop: run={}, pending_bits.len()={}",
+                        run,
+                        pending_bits.len()
+                    );
                 }
                 while run >= 16 {
                     let (code, size) = self.ac_table.get_code(0xF0);
                     if debug {
-                        eprintln!("  ZRL 0xF0: code={:#x}, size={}, emitting {} correction bits", code, size, pending_bits.len());
+                        eprintln!(
+                            "  ZRL 0xF0: code={:#x}, size={}, emitting {} correction bits",
+                            code,
+                            size,
+                            pending_bits.len()
+                        );
                     }
                     if size == 0 {
                         eprintln!("ERROR: ZRL symbol 0xF0 has no code!");
@@ -523,7 +541,11 @@ impl ProgressiveEncoder {
 
                 // Output pending correction bits
                 if debug && !pending_bits.is_empty() {
-                    eprintln!("    outputting {} pending correction bits: {:?}", pending_bits.len(), pending_bits);
+                    eprintln!(
+                        "    outputting {} pending correction bits: {:?}",
+                        pending_bits.len(),
+                        pending_bits
+                    );
                 }
                 for &bit in &pending_bits {
                     self.writer.write_bits(bit, 1);
@@ -549,7 +571,11 @@ impl ProgressiveEncoder {
 
                     let (code, size) = self.ac_table.get_code(0xF0);
                     if debug {
-                        eprintln!("  Incremental ZRL at k={}: emitting {} correction bits", k, pending_bits.len());
+                        eprintln!(
+                            "  Incremental ZRL at k={}: emitting {} correction bits",
+                            k,
+                            pending_bits.len()
+                        );
                     }
                     self.writer.write_bits(code, size);
 
@@ -594,8 +620,10 @@ impl ProgressiveEncoder {
         let symbol = nbits << 4;
         let (code, size) = self.ac_table.get_code(symbol);
         if debug {
-            eprintln!("  flush_eobrun_with_correction: eobrun={}, symbol=0x{:02X}, pending_bits={:?}",
-                self.eobrun, symbol, pending_bits);
+            eprintln!(
+                "  flush_eobrun_with_correction: eobrun={}, symbol=0x{:02X}, pending_bits={:?}",
+                self.eobrun, symbol, pending_bits
+            );
         }
         self.writer.write_bits(code, size);
 
@@ -633,8 +661,10 @@ impl ProgressiveEncoder {
         let symbol = nbits << 4;
         let (code, size) = self.ac_table.get_code(symbol);
         if debug {
-            eprintln!("  flush_eobrun: eobrun={}, nbits={}, symbol=0x{:02X}, code={:#x}, size={}",
-                self.eobrun, nbits, symbol, code, size);
+            eprintln!(
+                "  flush_eobrun: eobrun={}, nbits={}, symbol=0x{:02X}, code={:#x}, size={}",
+                self.eobrun, nbits, symbol, code, size
+            );
         }
         if size == 0 {
             eprintln!("ERROR: EOBn symbol 0x{:02X} has no code!", symbol);

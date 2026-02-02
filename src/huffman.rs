@@ -586,7 +586,10 @@ mod tests {
 
         // Run/Size=1 symbols commonly used in progressive refinement
         // At minimum, (0 << 4) | 1 = 0x01 should be present (most common)
-        assert!(dtbl.ehufsi[0x01] > 0, "Symbol 0x01 (run=0, size=1) must be present");
+        assert!(
+            dtbl.ehufsi[0x01] > 0,
+            "Symbol 0x01 (run=0, size=1) must be present"
+        );
 
         // Document which progressive symbols are missing (informational)
         let mut missing_eobn = Vec::new();

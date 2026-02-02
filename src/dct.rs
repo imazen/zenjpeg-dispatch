@@ -219,8 +219,14 @@ const SIMD_NEG_FIX_2_562915447: i32x4 = i32x4::new([-FIX_2_562915447; 4]);
 #[allow(clippy::too_many_arguments)]
 #[inline(always)]
 fn dct_1d_simd(
-    d0: i32x4, d1: i32x4, d2: i32x4, d3: i32x4,
-    d4: i32x4, d5: i32x4, d6: i32x4, d7: i32x4,
+    d0: i32x4,
+    d1: i32x4,
+    d2: i32x4,
+    d3: i32x4,
+    d4: i32x4,
+    d5: i32x4,
+    d6: i32x4,
+    d7: i32x4,
     shift_pass1: bool,
 ) -> [i32x4; 8] {
     // Even part
@@ -241,7 +247,10 @@ fn dct_1d_simd(
     let (out0, out4) = if shift_pass1 {
         ((tmp10 + tmp11) << PASS1_BITS, (tmp10 - tmp11) << PASS1_BITS)
     } else {
-        (descale_simd(tmp10 + tmp11, PASS1_BITS), descale_simd(tmp10 - tmp11, PASS1_BITS))
+        (
+            descale_simd(tmp10 + tmp11, PASS1_BITS),
+            descale_simd(tmp10 - tmp11, PASS1_BITS),
+        )
     };
 
     let z1 = (tmp12 + tmp13) * SIMD_FIX_0_541196100;
@@ -274,7 +283,11 @@ fn dct_1d_simd(
     let z3 = z3 * SIMD_NEG_FIX_1_961570560 + z5;
     let z4 = z4 * SIMD_NEG_FIX_0_390180644 + z5;
 
-    let scale = if shift_pass1 { CONST_BITS - PASS1_BITS } else { CONST_BITS + PASS1_BITS };
+    let scale = if shift_pass1 {
+        CONST_BITS - PASS1_BITS
+    } else {
+        CONST_BITS + PASS1_BITS
+    };
     let out7 = descale_simd(tmp4 + neg_z1 + z3, scale);
     let out5 = descale_simd(tmp5 + neg_z2 + z4, scale);
     let out3 = descale_simd(tmp6 + neg_z2 + z3, scale);
@@ -471,8 +484,14 @@ fn descale_simd8(x: i32x8, n: i32) -> i32x8 {
 #[allow(clippy::too_many_arguments)]
 #[inline(always)]
 fn dct_1d_8wide(
-    d0: i32x8, d1: i32x8, d2: i32x8, d3: i32x8,
-    d4: i32x8, d5: i32x8, d6: i32x8, d7: i32x8,
+    d0: i32x8,
+    d1: i32x8,
+    d2: i32x8,
+    d3: i32x8,
+    d4: i32x8,
+    d5: i32x8,
+    d6: i32x8,
+    d7: i32x8,
     shift_pass1: bool,
 ) -> [i32x8; 8] {
     let tmp0 = d0 + d7;
@@ -492,7 +511,10 @@ fn dct_1d_8wide(
     let (out0, out4) = if shift_pass1 {
         ((tmp10 + tmp11) << PASS1_BITS, (tmp10 - tmp11) << PASS1_BITS)
     } else {
-        (descale_simd8(tmp10 + tmp11, PASS1_BITS), descale_simd8(tmp10 - tmp11, PASS1_BITS))
+        (
+            descale_simd8(tmp10 + tmp11, PASS1_BITS),
+            descale_simd8(tmp10 - tmp11, PASS1_BITS),
+        )
     };
 
     let z1 = (tmp12 + tmp13) * SIMD8_FIX_0_541196100;
@@ -524,7 +546,11 @@ fn dct_1d_8wide(
     let z3 = z3 * SIMD8_NEG_FIX_1_961570560 + z5;
     let z4 = z4 * SIMD8_NEG_FIX_0_390180644 + z5;
 
-    let scale = if shift_pass1 { CONST_BITS - PASS1_BITS } else { CONST_BITS + PASS1_BITS };
+    let scale = if shift_pass1 {
+        CONST_BITS - PASS1_BITS
+    } else {
+        CONST_BITS + PASS1_BITS
+    };
     let out7 = descale_simd8(tmp4 + neg_z1 + z3, scale);
     let out5 = descale_simd8(tmp5 + neg_z2 + z4, scale);
     let out3 = descale_simd8(tmp6 + neg_z2 + z3, scale);
@@ -537,8 +563,14 @@ fn dct_1d_8wide(
 #[inline(always)]
 fn transpose_8x8(rows: &mut [i32x8; 8]) {
     let mut data: [[i32; 8]; 8] = [
-        rows[0].to_array(), rows[1].to_array(), rows[2].to_array(), rows[3].to_array(),
-        rows[4].to_array(), rows[5].to_array(), rows[6].to_array(), rows[7].to_array(),
+        rows[0].to_array(),
+        rows[1].to_array(),
+        rows[2].to_array(),
+        rows[3].to_array(),
+        rows[4].to_array(),
+        rows[5].to_array(),
+        rows[6].to_array(),
+        rows[7].to_array(),
     ];
 
     #[allow(clippy::needless_range_loop)]
@@ -564,26 +596,28 @@ pub fn forward_dct_8x8_transpose(samples: &[i16; DCTSIZE2], coeffs: &mut [i16; D
     let mut data: [i32x8; 8] = std::array::from_fn(|row| {
         let base = row * 8;
         i32x8::new([
-            samples[base] as i32, samples[base + 1] as i32,
-            samples[base + 2] as i32, samples[base + 3] as i32,
-            samples[base + 4] as i32, samples[base + 5] as i32,
-            samples[base + 6] as i32, samples[base + 7] as i32,
+            samples[base] as i32,
+            samples[base + 1] as i32,
+            samples[base + 2] as i32,
+            samples[base + 3] as i32,
+            samples[base + 4] as i32,
+            samples[base + 5] as i32,
+            samples[base + 6] as i32,
+            samples[base + 7] as i32,
         ])
     });
 
     transpose_8x8(&mut data);
 
     let result = dct_1d_8wide(
-        data[0], data[1], data[2], data[3],
-        data[4], data[5], data[6], data[7], true,
+        data[0], data[1], data[2], data[3], data[4], data[5], data[6], data[7], true,
     );
     data = result;
 
     transpose_8x8(&mut data);
 
     let result = dct_1d_8wide(
-        data[0], data[1], data[2], data[3],
-        data[4], data[5], data[6], data[7], false,
+        data[0], data[1], data[2], data[3], data[4], data[5], data[6], data[7], false,
     );
     data = result;
 
@@ -672,11 +706,21 @@ pub fn forward_dct_8x8(block: &[i16; 64]) -> [f32; 64] {
             for y in 0..8 {
                 for x in 0..8 {
                     let pixel = block[y * 8 + x] as f32;
-                    let cu = if u == 0 { 1.0 / std::f32::consts::SQRT_2 } else { 1.0 };
-                    let cv = if v == 0 { 1.0 / std::f32::consts::SQRT_2 } else { 1.0 };
+                    let cu = if u == 0 {
+                        1.0 / std::f32::consts::SQRT_2
+                    } else {
+                        1.0
+                    };
+                    let cv = if v == 0 {
+                        1.0 / std::f32::consts::SQRT_2
+                    } else {
+                        1.0
+                    };
 
-                    let cos_u = ((2.0 * x as f32 + 1.0) * u as f32 * std::f32::consts::PI / 16.0).cos();
-                    let cos_v = ((2.0 * y as f32 + 1.0) * v as f32 * std::f32::consts::PI / 16.0).cos();
+                    let cos_u =
+                        ((2.0 * x as f32 + 1.0) * u as f32 * std::f32::consts::PI / 16.0).cos();
+                    let cos_v =
+                        ((2.0 * y as f32 + 1.0) * v as f32 * std::f32::consts::PI / 16.0).cos();
 
                     sum += cu * cv * pixel * cos_u * cos_v;
                 }
@@ -732,7 +776,11 @@ mod tests {
         let samples = [127i16; 64];
         let mut coeffs = [0i16; 64];
         forward_dct_8x8_int(&samples, &mut coeffs);
-        assert_eq!(coeffs[0], 8128, "DC = {} (expected 8128 with 8x scaling)", coeffs[0]);
+        assert_eq!(
+            coeffs[0], 8128,
+            "DC = {} (expected 8128 with 8x scaling)",
+            coeffs[0]
+        );
         for i in 1..64 {
             assert_eq!(coeffs[i], 0, "AC[{}] = {} (expected 0)", i, coeffs[i]);
         }
@@ -745,7 +793,11 @@ mod tests {
         let samples = [-128i16; 64];
         let mut coeffs = [0i16; 64];
         forward_dct_8x8_int(&samples, &mut coeffs);
-        assert_eq!(coeffs[0], -8192, "DC = {} (expected -8192 with 8x scaling)", coeffs[0]);
+        assert_eq!(
+            coeffs[0], -8192,
+            "DC = {} (expected -8192 with 8x scaling)",
+            coeffs[0]
+        );
         for i in 1..64 {
             assert_eq!(coeffs[i], 0, "AC[{}] = {} (expected 0)", i, coeffs[i]);
         }
@@ -765,7 +817,11 @@ mod tests {
             forward_dct_8x8_int(&samples, &mut coeffs_scalar);
             forward_dct_8x8_simd(&samples, &mut coeffs_simd);
 
-            assert_eq!(coeffs_scalar, coeffs_simd, "SIMD should match scalar for seed {}", seed);
+            assert_eq!(
+                coeffs_scalar, coeffs_simd,
+                "SIMD should match scalar for seed {}",
+                seed
+            );
         }
     }
 
@@ -783,7 +839,11 @@ mod tests {
             forward_dct_8x8_int(&samples, &mut coeffs_scalar);
             forward_dct_8x8_transpose(&samples, &mut coeffs_transpose);
 
-            assert_eq!(coeffs_scalar, coeffs_transpose, "Transpose should match scalar for seed {}", seed);
+            assert_eq!(
+                coeffs_scalar, coeffs_transpose,
+                "Transpose should match scalar for seed {}",
+                seed
+            );
         }
     }
 
@@ -799,8 +859,8 @@ mod tests {
 
         quantize_block_int(&coeffs, &quant, &mut output);
 
-        assert_eq!(output[0], 6);  // 100 / 16 = 6.25 -> 6
-        assert_eq!(output[1], 3);  // 50 / 16 = 3.125 -> 3
+        assert_eq!(output[0], 6); // 100 / 16 = 6.25 -> 6
+        assert_eq!(output[1], 3); // 50 / 16 = 3.125 -> 3
         assert_eq!(output[2], -2); // -30 / 16 = -1.875 -> -2
         assert_eq!(output[3], 0);
     }

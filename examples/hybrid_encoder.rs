@@ -33,21 +33,18 @@ fn scale_quant_table(base: &[u16; 64], aq_strength: f32) -> [u16; 64] {
     // We map this to a multiplier: strength=0 → 1.0x, strength=0.5 → ~1.5x
     let multiplier = 1.0 + aq_strength;
     for i in 0..64 {
-        scaled[i] = ((base[i] as f32 * multiplier).round() as u16).max(1).min(255);
+        scaled[i] = ((base[i] as f32 * multiplier).round() as u16)
+            .max(1)
+            .min(255);
     }
     scaled
 }
 
 /// Standard luminance quantization table
 const STD_LUMA_QUANT: [u16; 64] = [
-    16, 11, 10, 16, 24, 40, 51, 61,
-    12, 12, 14, 19, 26, 58, 60, 55,
-    14, 13, 16, 24, 40, 57, 69, 56,
-    14, 17, 22, 29, 51, 87, 80, 62,
-    18, 22, 37, 56, 68, 109, 103, 77,
-    24, 35, 55, 64, 81, 104, 113, 92,
-    49, 64, 78, 87, 103, 121, 120, 101,
-    72, 92, 95, 98, 112, 100, 103, 99,
+    16, 11, 10, 16, 24, 40, 51, 61, 12, 12, 14, 19, 26, 58, 60, 55, 14, 13, 16, 24, 40, 57, 69, 56,
+    14, 17, 22, 29, 51, 87, 80, 62, 18, 22, 37, 56, 68, 109, 103, 77, 24, 35, 55, 64, 81, 104, 113,
+    92, 49, 64, 78, 87, 103, 121, 120, 101, 72, 92, 95, 98, 112, 100, 103, 99,
 ];
 
 /// Scale quant table for quality level (simplified)
@@ -146,7 +143,10 @@ fn main() {
         }
     }
     let aq_mean = aq_sum / (width_blocks * height_blocks) as f32;
-    println!("   AQ strengths: min={:.3}, max={:.3}, mean={:.3}", aq_min, aq_max, aq_mean);
+    println!(
+        "   AQ strengths: min={:.3}, max={:.3}, mean={:.3}",
+        aq_min, aq_max, aq_mean
+    );
 
     // Step 3: Show AQ map for different image regions
     println!("\n3. AQ strength by quadrant:");
@@ -154,7 +154,11 @@ fn main() {
         ("Smooth gradient (top-left)", 0, 0),
         ("Sharp edges (top-right)", width_blocks / 2, 0),
         ("Color gradient (bottom-left)", 0, height_blocks / 2),
-        ("High frequency (bottom-right)", width_blocks / 2, height_blocks / 2),
+        (
+            "High frequency (bottom-right)",
+            width_blocks / 2,
+            height_blocks / 2,
+        ),
     ];
 
     for (name, start_bx, start_by) in quadrants {
@@ -172,7 +176,7 @@ fn main() {
 
     // Step 4: Demonstrate per-block quant table scaling
     println!("\n4. Quant table scaling examples:");
-    let low_aq = aq_map.get(2, 2);   // Likely smooth area
+    let low_aq = aq_map.get(2, 2); // Likely smooth area
     let high_aq = aq_map.get(width_blocks / 2 + 2, 2); // Likely edge area
 
     let scaled_low = scale_quant_table(&base_quant, low_aq);
@@ -180,7 +184,11 @@ fn main() {
 
     println!("   Base quant[0..4]: {:?}", &base_quant[0..4]);
     println!("   Low AQ ({:.3}) scaled: {:?}", low_aq, &scaled_low[0..4]);
-    println!("   High AQ ({:.3}) scaled: {:?}", high_aq, &scaled_high[0..4]);
+    println!(
+        "   High AQ ({:.3}) scaled: {:?}",
+        high_aq,
+        &scaled_high[0..4]
+    );
 
     // Step 5: Compare approaches
     println!("\n5. Encoding comparison:");
@@ -203,12 +211,21 @@ fn main() {
         .unwrap();
     let jpegli_time = start.elapsed();
 
-    println!("   mozjpeg: {} bytes in {:?}", mozjpeg_result.len(), mozjpeg_time);
-    println!("   jpegli:  {} bytes in {:?}", jpegli_result.len(), jpegli_time);
+    println!(
+        "   mozjpeg: {} bytes in {:?}",
+        mozjpeg_result.len(),
+        mozjpeg_time
+    );
+    println!(
+        "   jpegli:  {} bytes in {:?}",
+        jpegli_result.len(),
+        jpegli_time
+    );
 
     // Note about hybrid implementation
     println!("\n=== Hybrid Implementation Notes ===");
-    println!("
+    println!(
+        "
 To fully implement hybrid encoding, we need to:
 
 1. Extract Y/Cb/Cr planes from RGB
@@ -225,7 +242,8 @@ To fully implement hybrid encoding, we need to:
 The key insight is that trellis sees DIFFERENT quant tables per block,
 making it spend fewer bits on busy/textured areas (high AQ) and more
 bits on smooth/important areas (low AQ).
-");
+"
+    );
 
     // Quick simulation: how much would quant tables vary?
     println!("=== Quant Table Variation Analysis ===\n");
@@ -243,10 +261,14 @@ bits on smooth/important areas (low AQ).
         }
     }
 
-    println!("DC quant value range: {} to {} (base: {})",
-             quant_dc_min, quant_dc_max, base_quant[0]);
+    println!(
+        "DC quant value range: {} to {} (base: {})",
+        quant_dc_min, quant_dc_max, base_quant[0]
+    );
     println!("Total blocks: {}", total_blocks);
-    println!("\nThis {}% variation in quant tables could improve rate-distortion\n\
+    println!(
+        "\nThis {}% variation in quant tables could improve rate-distortion\n\
               by letting trellis make block-appropriate decisions.",
-             ((quant_dc_max - quant_dc_min) as f32 / base_quant[0] as f32 * 100.0) as i32);
+        ((quant_dc_max - quant_dc_min) as f32 / base_quant[0] as f32 * 100.0) as i32
+    );
 }
