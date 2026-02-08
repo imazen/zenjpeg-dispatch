@@ -65,7 +65,7 @@ butteraugli = { path = "../butteraugli/butteraugli" }
 fast-ssim2 = { version = "0.6", features = ["imgref"] }
 
 # Codec evaluation (handles metrics, ICC profiles, and JPEG decoding)
-codec-eval = { path = "../codec-eval" }
+codec-eval = "0.3"
 
 # Testing
 proptest = "1.4"
