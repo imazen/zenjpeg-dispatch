@@ -1,0 +1,71 @@
+{
+  "global_code_hash": "sha256:81b3cc48a2b5c268",
+  "git_commit": "fbfe277a836ce0c825b21b8839a3e201b78694a1",
+  "configs": {
+    "mozjpeg-max-444": {
+      "version": 5,
+      "code_hash": "sha256:43213946bcfb67d2",
+      "git_commit": "fbfe277a836ce0c825b21b8839a3e201b78694a1",
+      "source_files": [
+        "examples/discover_heuristics.rs"
+      ]
+    },
+    "cmozjpeg-max-420": {
+      "version": 4,
+      "code_hash": "sha256:a51e0fa291f3f7a3",
+      "git_commit": "e04ea4db6538c6c4ba59fb04a38b8d29941704ec",
+      "source_files": [
+        "examples/discover_heuristics.rs"
+      ]
+    },
+    "cmozjpeg-420": {
+      "version": 4,
+      "code_hash": "sha256:a51e0fa291f3f7a3",
+      "git_commit": "e04ea4db6538c6c4ba59fb04a38b8d29941704ec",
+      "source_files": [
+        "examples/discover_heuristics.rs"
+      ]
+    },
+    "jpegli-420": {
+      "version": 5,
+      "code_hash": "sha256:8a290aacaae34adc",
+      "git_commit": "fbfe277a836ce0c825b21b8839a3e201b78694a1",
+      "source_files": [
+        "examples/discover_heuristics.rs"
+      ]
+    },
+    "mozjpeg-444": {
+      "version": 5,
+      "code_hash": "sha256:43213946bcfb67d2",
+      "git_commit": "fbfe277a836ce0c825b21b8839a3e201b78694a1",
+      "source_files": [
+        "examples/discover_heuristics.rs"
+      ]
+    },
+    "mozjpeg-max-420": {
+      "version": 5,
+      "code_hash": "sha256:43213946bcfb67d2",
+      "git_commit": "fbfe277a836ce0c825b21b8839a3e201b78694a1",
+      "source_files": [
+        "examples/discover_heuristics.rs"
+      ]
+    },
+    "jpegli-444": {
+      "version": 5,
+      "code_hash": "sha256:8a290aacaae34adc",
+      "git_commit": "fbfe277a836ce0c825b21b8839a3e201b78694a1",
+      "source_files": [
+        "examples/discover_heuristics.rs"
+      ]
+    },
+    "mozjpeg-420": {
+      "version": 5,
+      "code_hash": "sha256:43213946bcfb67d2",
+      "git_commit": "fbfe277a836ce0c825b21b8839a3e201b78694a1",
+      "source_files": [
+        "examples/discover_heuristics.rs"
+      ]
+    }
+  },
+  "last_updated": "2026-01-08T05:26:20.900842818Z"
+}

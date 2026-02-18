@@ -1,0 +1,225 @@
+bpp_range,metric,config_a,config_b,characteristic,correlation,p_value,n,wins_a,wins_b
+Very Low (0.2-0.5),ssimulacra2,jpegli-420,mozjpeg-420,variance,-0.2278638372836716,0.03828456325015487,83,70,13
+Very Low (0.2-0.5),ssimulacra2,jpegli-420,mozjpeg-420,edge_density,-0.08792639369836405,0.42927567710808356,83,70,13
+Very Low (0.2-0.5),ssimulacra2,jpegli-420,mozjpeg-420,chroma_complexity,-0.09764425253171609,0.3798398243083434,83,70,13
+Very Low (0.2-0.5),ssimulacra2,jpegli-420,mozjpeg-420,uniform_block_fraction,-0.18885087745222232,0.08729488882057201,83,70,13
+Very Low (0.2-0.5),ssimulacra2,jpegli-420,jpegli-444,variance,0.18431722214762286,0.12115985251550919,72,70,2
+Very Low (0.2-0.5),ssimulacra2,jpegli-420,jpegli-444,edge_density,0.17086326221123307,0.15127990105105116,72,70,2
+Very Low (0.2-0.5),ssimulacra2,jpegli-420,jpegli-444,chroma_complexity,-0.26105862163412036,0.026763521332764915,72,70,2
+Very Low (0.2-0.5),ssimulacra2,jpegli-420,jpegli-444,uniform_block_fraction,-0.3355088967287457,0.003963210686017642,72,70,2
+Very Low (0.2-0.5),ssimulacra2,jpegli-420,mozjpeg-444,variance,0.03244047348289244,0.7882628828578776,71,70,1
+Very Low (0.2-0.5),ssimulacra2,jpegli-420,mozjpeg-444,edge_density,-0.02748012741452971,0.8200469729584755,71,70,1
+Very Low (0.2-0.5),ssimulacra2,jpegli-420,mozjpeg-444,chroma_complexity,0.0461442779300498,0.7023718177523949,71,70,1
+Very Low (0.2-0.5),ssimulacra2,jpegli-420,mozjpeg-444,uniform_block_fraction,-0.3666147919778102,0.0016632343453439685,71,70,1
+Very Low (0.2-0.5),ssimulacra2,mozjpeg-420,mozjpeg-444,variance,0.20524001726748178,0.4815012579986486,14,13,1
+Very Low (0.2-0.5),ssimulacra2,mozjpeg-420,mozjpeg-444,edge_density,0.005008858417841117,0.9864414306866687,14,13,1
+Very Low (0.2-0.5),ssimulacra2,mozjpeg-420,mozjpeg-444,chroma_complexity,0.1424146082928422,0.6271984278252547,14,13,1
+Very Low (0.2-0.5),ssimulacra2,mozjpeg-420,mozjpeg-444,uniform_block_fraction,-0.43423484230745385,0.12079856702057186,14,13,1
+Very Low (0.2-0.5),ssimulacra2,jpegli-444,mozjpeg-420,variance,-0.47808202085070756,0.07146168680440623,15,2,13
+Very Low (0.2-0.5),ssimulacra2,jpegli-444,mozjpeg-420,edge_density,-0.33926410423481695,0.21606005123456137,15,2,13
+Very Low (0.2-0.5),ssimulacra2,jpegli-444,mozjpeg-420,chroma_complexity,0.33513405991148143,0.22206084698694756,15,2,13
+Very Low (0.2-0.5),ssimulacra2,jpegli-444,mozjpeg-420,uniform_block_fraction,0.3388962320367477,0.21659034871342805,15,2,13
+Very Low (0.2-0.5),butteraugli,jpegli-420,mozjpeg-420,variance,0.02669925800146189,0.8238270610353006,72,50,22
+Very Low (0.2-0.5),butteraugli,jpegli-420,mozjpeg-420,edge_density,-0.2839557818811117,0.015637867704784408,72,50,22
+Very Low (0.2-0.5),butteraugli,jpegli-420,mozjpeg-420,chroma_complexity,0.023664614133751122,0.8435816687505197,72,50,22
+Very Low (0.2-0.5),butteraugli,jpegli-420,mozjpeg-420,uniform_block_fraction,0.36412996595112057,0.001664438451307033,72,50,22
+Very Low (0.2-0.5),butteraugli,jpegli-420,jpegli-444,variance,0.007570790047954357,0.953822470252528,61,50,11
+Very Low (0.2-0.5),butteraugli,jpegli-420,jpegli-444,edge_density,0.2260951479339709,0.07975766674849395,61,50,11
+Very Low (0.2-0.5),butteraugli,jpegli-420,jpegli-444,chroma_complexity,-0.16049365683754768,0.21661043614034797,61,50,11
+Very Low (0.2-0.5),butteraugli,jpegli-420,jpegli-444,uniform_block_fraction,-0.11585192887452431,0.3739426652222349,61,50,11
+Very Low (0.2-0.5),butteraugli,jpegli-420,mozjpeg-444,variance,0.07576970850747976,0.5897249465467684,53,50,3
+Very Low (0.2-0.5),butteraugli,jpegli-420,mozjpeg-444,edge_density,-0.08235811367405078,0.5576897360309132,53,50,3
+Very Low (0.2-0.5),butteraugli,jpegli-420,mozjpeg-444,chroma_complexity,-0.2267580076651416,0.10250977763852391,53,50,3
+Very Low (0.2-0.5),butteraugli,jpegli-420,mozjpeg-444,uniform_block_fraction,0.12209367101515706,0.38379504987654456,53,50,3
+Very Low (0.2-0.5),butteraugli,mozjpeg-420,mozjpeg-444,variance,0.12834618050165278,0.5409255786763104,25,22,3
+Very Low (0.2-0.5),butteraugli,mozjpeg-420,mozjpeg-444,edge_density,0.10039536192929088,0.633015423826502,25,22,3
+Very Low (0.2-0.5),butteraugli,mozjpeg-420,mozjpeg-444,chroma_complexity,-0.3871731508577919,0.05586397678203598,25,22,3
+Very Low (0.2-0.5),butteraugli,mozjpeg-420,mozjpeg-444,uniform_block_fraction,-0.27130779449334297,0.18956870634160286,25,22,3
+Very Low (0.2-0.5),butteraugli,jpegli-444,mozjpeg-420,variance,0.022072639889113628,0.9029598292088793,33,11,22
+Very Low (0.2-0.5),butteraugli,jpegli-444,mozjpeg-420,edge_density,-0.5497867840620552,0.0009188614229702089,33,11,22
+Very Low (0.2-0.5),butteraugli,jpegli-444,mozjpeg-420,chroma_complexity,0.2845974450050746,0.10844001705476207,33,11,22
+Very Low (0.2-0.5),butteraugli,jpegli-444,mozjpeg-420,uniform_block_fraction,0.6432662786436649,5.396533644584212e-05,33,11,22
+Very Low (0.2-0.5),butteraugli,jpegli-444,mozjpeg-444,variance,0.17101220963713515,0.5588534583941694,14,11,3
+Very Low (0.2-0.5),butteraugli,jpegli-444,mozjpeg-444,edge_density,-0.5777723648148054,0.0304715757915194,14,11,3
+Very Low (0.2-0.5),butteraugli,jpegli-444,mozjpeg-444,chroma_complexity,-0.28049216530996596,0.33137569240595005,14,11,3
+Very Low (0.2-0.5),butteraugli,jpegli-444,mozjpeg-444,uniform_block_fraction,0.3602774302439141,0.20573675971500865,14,11,3
+Low (0.5-1.0),ssimulacra2,jpegli-444,mozjpeg-420,variance,-0.09294369957493956,0.5683897141327813,40,17,23
+Low (0.5-1.0),ssimulacra2,jpegli-444,mozjpeg-420,edge_density,-0.5297533556082519,0.00043915042468726037,40,17,23
+Low (0.5-1.0),ssimulacra2,jpegli-444,mozjpeg-420,chroma_complexity,0.053320644248441934,0.7438430608341162,40,17,23
+Low (0.5-1.0),ssimulacra2,jpegli-444,mozjpeg-420,uniform_block_fraction,0.5303476824329455,0.00043148335766947165,40,17,23
+Low (0.5-1.0),ssimulacra2,jpegli-444,mozjpeg-444,variance,0.08979312043858842,0.7146880037229321,19,17,2
+Low (0.5-1.0),ssimulacra2,jpegli-444,mozjpeg-444,edge_density,-0.5776170214492882,0.00959971451494911,19,17,2
+Low (0.5-1.0),ssimulacra2,jpegli-444,mozjpeg-444,chroma_complexity,-0.4597386178247,0.04765879932563973,19,17,2
+Low (0.5-1.0),ssimulacra2,jpegli-444,mozjpeg-444,uniform_block_fraction,-0.07364848803353322,0.7644524444724153,19,17,2
+Low (0.5-1.0),ssimulacra2,jpegli-420,jpegli-444,variance,-0.038292406513557066,0.7695270866534283,61,44,17
+Low (0.5-1.0),ssimulacra2,jpegli-420,jpegli-444,edge_density,0.4183425575130652,0.0007934672321239573,61,44,17
+Low (0.5-1.0),ssimulacra2,jpegli-420,jpegli-444,chroma_complexity,-0.11656797997925877,0.3709766237231948,61,44,17
+Low (0.5-1.0),ssimulacra2,jpegli-420,jpegli-444,uniform_block_fraction,-0.5070687285090855,3.0416357844050373e-05,61,44,17
+Low (0.5-1.0),ssimulacra2,jpegli-420,mozjpeg-420,variance,-0.13638549027043315,0.27111152214149165,67,44,23
+Low (0.5-1.0),ssimulacra2,jpegli-420,mozjpeg-420,edge_density,-0.3638052656359216,0.0024759310579521845,67,44,23
+Low (0.5-1.0),ssimulacra2,jpegli-420,mozjpeg-420,chroma_complexity,-0.0651804263722993,0.6002491836108726,67,44,23
+Low (0.5-1.0),ssimulacra2,jpegli-420,mozjpeg-420,uniform_block_fraction,0.018794483260779413,0.8800091094047929,67,44,23
+Low (0.5-1.0),ssimulacra2,jpegli-420,mozjpeg-444,variance,0.04823370349748011,0.7502427839269008,46,44,2
+Low (0.5-1.0),ssimulacra2,jpegli-420,mozjpeg-444,edge_density,-0.34795091288887164,0.017810103396571714,46,44,2
+Low (0.5-1.0),ssimulacra2,jpegli-420,mozjpeg-444,chroma_complexity,-0.5513212843564963,7.159040643338561e-05,46,44,2
+Low (0.5-1.0),ssimulacra2,jpegli-420,mozjpeg-444,uniform_block_fraction,-0.3220094489094107,0.029082609717565995,46,44,2
+Low (0.5-1.0),ssimulacra2,mozjpeg-420,mozjpeg-444,variance,0.16225955319201363,0.4383876304502238,25,23,2
+Low (0.5-1.0),ssimulacra2,mozjpeg-420,mozjpeg-444,edge_density,-0.11978165002706669,0.568470052574406,25,23,2
+Low (0.5-1.0),ssimulacra2,mozjpeg-420,mozjpeg-444,chroma_complexity,-0.5124059669506145,0.008822652406917458,25,23,2
+Low (0.5-1.0),ssimulacra2,mozjpeg-420,mozjpeg-444,uniform_block_fraction,-0.38927936371201716,0.05442971555324877,25,23,2
+Low (0.5-1.0),butteraugli,jpegli-444,mozjpeg-444,variance,0.04671378651509842,0.77764436281494,39,37,2
+Low (0.5-1.0),butteraugli,jpegli-444,mozjpeg-444,edge_density,-0.03771867034486395,0.8196694062583986,39,37,2
+Low (0.5-1.0),butteraugli,jpegli-444,mozjpeg-444,chroma_complexity,-0.46434894807648713,0.0029025507584286006,39,37,2
+Low (0.5-1.0),butteraugli,jpegli-444,mozjpeg-444,uniform_block_fraction,-0.13775185143335023,0.4030038984236078,39,37,2
+Low (0.5-1.0),butteraugli,jpegli-444,mozjpeg-420,variance,-0.13240402864366407,0.41539429149584656,40,37,3
+Low (0.5-1.0),butteraugli,jpegli-444,mozjpeg-420,edge_density,-0.6551652563406559,4.487356495067407e-06,40,37,3
+Low (0.5-1.0),butteraugli,jpegli-444,mozjpeg-420,chroma_complexity,0.11700344967553489,0.47213793263946596,40,37,3
+Low (0.5-1.0),butteraugli,jpegli-444,mozjpeg-420,uniform_block_fraction,0.2659186324888619,0.0972167835254613,40,37,3
+Low (0.5-1.0),butteraugli,jpegli-420,jpegli-444,variance,0.08928109339784815,0.4279960939898747,81,44,37
+Low (0.5-1.0),butteraugli,jpegli-420,jpegli-444,edge_density,0.3410633105656983,0.0018341398703181678,81,44,37
+Low (0.5-1.0),butteraugli,jpegli-420,jpegli-444,chroma_complexity,-0.1953751931495447,0.08047546400299824,81,44,37
+Low (0.5-1.0),butteraugli,jpegli-420,jpegli-444,uniform_block_fraction,-0.4031075422962383,0.00019056429708558787,81,44,37
+Low (0.5-1.0),butteraugli,jpegli-420,mozjpeg-444,variance,0.07562626428212493,0.617411171898517,46,44,2
+Low (0.5-1.0),butteraugli,jpegli-420,mozjpeg-444,edge_density,0.10329024543681915,0.4945438904751452,46,44,2
+Low (0.5-1.0),butteraugli,jpegli-420,mozjpeg-444,chroma_complexity,-0.5968338658645294,1.19827689977562e-05,46,44,2
+Low (0.5-1.0),butteraugli,jpegli-420,mozjpeg-444,uniform_block_fraction,-0.40164467554220357,0.005663099053774671,46,44,2
+Low (0.5-1.0),butteraugli,jpegli-420,mozjpeg-420,variance,-0.06990603077149178,0.6405582403361855,47,44,3
+Low (0.5-1.0),butteraugli,jpegli-420,mozjpeg-420,edge_density,-0.26243405021608485,0.07473435478791057,47,44,3
+Low (0.5-1.0),butteraugli,jpegli-420,mozjpeg-420,chroma_complexity,0.028877006723147955,0.8472095934870737,47,44,3
+Low (0.5-1.0),butteraugli,jpegli-420,mozjpeg-420,uniform_block_fraction,0.14887071536724844,0.31793862423364166,47,44,3
+Medium (1.0-1.5),ssimulacra2,jpegli-444,mozjpeg-420,variance,-0.007575404702895135,0.9541905091629989,60,27,33
+Medium (1.0-1.5),ssimulacra2,jpegli-444,mozjpeg-420,edge_density,-0.30441801929541723,0.01803807934160294,60,27,33
+Medium (1.0-1.5),ssimulacra2,jpegli-444,mozjpeg-420,chroma_complexity,0.18138562872552094,0.16544573709514712,60,27,33
+Medium (1.0-1.5),ssimulacra2,jpegli-444,mozjpeg-420,uniform_block_fraction,0.11345033248325842,0.38808923310929705,60,27,33
+Medium (1.0-1.5),ssimulacra2,jpegli-444,mozjpeg-444,variance,0.18956181860411342,0.3157212067791788,30,27,3
+Medium (1.0-1.5),ssimulacra2,jpegli-444,mozjpeg-444,edge_density,-0.2782887798759632,0.13646677807307614,30,27,3
+Medium (1.0-1.5),ssimulacra2,jpegli-444,mozjpeg-444,chroma_complexity,-0.5875658699419675,0.0006403067490395844,30,27,3
+Medium (1.0-1.5),ssimulacra2,jpegli-444,mozjpeg-444,uniform_block_fraction,-0.17506066406600157,0.3548219441375877,30,27,3
+Medium (1.0-1.5),ssimulacra2,jpegli-420,jpegli-444,variance,-0.3219642672509551,0.022599572009632248,50,23,27
+Medium (1.0-1.5),ssimulacra2,jpegli-420,jpegli-444,edge_density,0.04713181177186463,0.7451632650577971,50,23,27
+Medium (1.0-1.5),ssimulacra2,jpegli-420,jpegli-444,chroma_complexity,-0.17360034049762774,0.22794399072802998,50,23,27
+Medium (1.0-1.5),ssimulacra2,jpegli-420,jpegli-444,uniform_block_fraction,-0.25590696627231624,0.07285028438303992,50,23,27
+Medium (1.0-1.5),ssimulacra2,jpegli-420,mozjpeg-420,variance,-0.3720411580753143,0.0047512652644194605,56,23,33
+Medium (1.0-1.5),ssimulacra2,jpegli-420,mozjpeg-420,edge_density,-0.28132212268461754,0.035696842955992465,56,23,33
+Medium (1.0-1.5),ssimulacra2,jpegli-420,mozjpeg-420,chroma_complexity,-0.0009432780416617909,0.994494930459428,56,23,33
+Medium (1.0-1.5),ssimulacra2,jpegli-420,mozjpeg-420,uniform_block_fraction,-0.13292372736066987,0.32875852286810875,56,23,33
+Medium (1.0-1.5),ssimulacra2,jpegli-420,mozjpeg-444,variance,0.00453752311799464,0.9824487055234641,26,23,3
+Medium (1.0-1.5),ssimulacra2,jpegli-420,mozjpeg-444,edge_density,-0.28504336246666134,0.15811512644136289,26,23,3
+Medium (1.0-1.5),ssimulacra2,jpegli-420,mozjpeg-444,chroma_complexity,-0.7409316371019055,1.4963833173031983e-05,26,23,3
+Medium (1.0-1.5),ssimulacra2,jpegli-420,mozjpeg-444,uniform_block_fraction,-0.3768703911956933,0.057720510107404976,26,23,3
+Medium (1.0-1.5),ssimulacra2,mozjpeg-420,mozjpeg-444,variance,0.22505614055410633,0.18694001698254298,36,33,3
+Medium (1.0-1.5),ssimulacra2,mozjpeg-420,mozjpeg-444,edge_density,-0.03391220613787499,0.8443373082919116,36,33,3
+Medium (1.0-1.5),ssimulacra2,mozjpeg-420,mozjpeg-444,chroma_complexity,-0.7123675554659544,1.0981239931618733e-06,36,33,3
+Medium (1.0-1.5),ssimulacra2,mozjpeg-420,mozjpeg-444,uniform_block_fraction,-0.22212899592838323,0.19289058016276767,36,33,3
+Medium (1.0-1.5),butteraugli,jpegli-444,mozjpeg-444,variance,0.10063073817834006,0.4868438989548836,50,49,1
+Medium (1.0-1.5),butteraugli,jpegli-444,mozjpeg-444,edge_density,0.18602099534864389,0.1958655140066548,50,49,1
+Medium (1.0-1.5),butteraugli,jpegli-444,mozjpeg-444,chroma_complexity,-0.2898473224412123,0.041176293217609856,50,49,1
+Medium (1.0-1.5),butteraugli,jpegli-444,mozjpeg-444,uniform_block_fraction,-0.3644067874245793,0.00927616997927378,50,49,1
+Medium (1.0-1.5),butteraugli,jpegli-444,mozjpeg-420,variance,-0.15942120082837538,0.258942139494844,52,49,3
+Medium (1.0-1.5),butteraugli,jpegli-444,mozjpeg-420,edge_density,-0.2595437213472861,0.06315743227873244,52,49,3
+Medium (1.0-1.5),butteraugli,jpegli-444,mozjpeg-420,chroma_complexity,-0.2803573209547705,0.04410287673288596,52,49,3
+Medium (1.0-1.5),butteraugli,jpegli-444,mozjpeg-420,uniform_block_fraction,-0.09378846582310725,0.5083957668501917,52,49,3
+Medium (1.0-1.5),butteraugli,jpegli-420,jpegli-444,variance,0.040062457671401444,0.7208259718411488,82,33,49
+Medium (1.0-1.5),butteraugli,jpegli-420,jpegli-444,edge_density,0.298642154529521,0.0064244258033446505,82,33,49
+Medium (1.0-1.5),butteraugli,jpegli-420,jpegli-444,chroma_complexity,-0.23606709321585537,0.03274981083709349,82,33,49
+Medium (1.0-1.5),butteraugli,jpegli-420,jpegli-444,uniform_block_fraction,-0.2540939617980676,0.02124842336657211,82,33,49
+Medium (1.0-1.5),butteraugli,jpegli-420,mozjpeg-444,variance,0.1294314113881877,0.46566139769914566,34,33,1
+Medium (1.0-1.5),butteraugli,jpegli-420,mozjpeg-444,edge_density,0.20633925114246748,0.241678069919683,34,33,1
+Medium (1.0-1.5),butteraugli,jpegli-420,mozjpeg-444,chroma_complexity,-0.4189423997157956,0.01365959577786122,34,33,1
+Medium (1.0-1.5),butteraugli,jpegli-420,mozjpeg-444,uniform_block_fraction,-0.677894868051716,1.0593663608000323e-05,34,33,1
+Medium (1.0-1.5),butteraugli,jpegli-420,mozjpeg-420,variance,-0.159783753941932,0.3519218478238193,36,33,3
+Medium (1.0-1.5),butteraugli,jpegli-420,mozjpeg-420,edge_density,-0.07678104984059034,0.6562576502109808,36,33,3
+Medium (1.0-1.5),butteraugli,jpegli-420,mozjpeg-420,chroma_complexity,-0.4439488754410331,0.006681988098507211,36,33,3
+Medium (1.0-1.5),butteraugli,jpegli-420,mozjpeg-420,uniform_block_fraction,-0.3541678501744206,0.03406970043800817,36,33,3
+High (1.5-2.0),ssimulacra2,jpegli-420,mozjpeg-420,variance,-0.32638893500982813,0.042571039028506265,39,21,18
+High (1.5-2.0),ssimulacra2,jpegli-420,mozjpeg-420,edge_density,-0.2814603292419202,0.0825962763074158,39,21,18
+High (1.5-2.0),ssimulacra2,jpegli-420,mozjpeg-420,chroma_complexity,0.15926167643959727,0.3328300437437141,39,21,18
+High (1.5-2.0),ssimulacra2,jpegli-420,mozjpeg-420,uniform_block_fraction,-0.015664535996967086,0.9245944924601988,39,21,18
+High (1.5-2.0),ssimulacra2,jpegli-420,jpegli-444,variance,-0.17106165656498762,0.19517941605257164,59,21,38
+High (1.5-2.0),ssimulacra2,jpegli-420,jpegli-444,edge_density,0.10912052684300685,0.410679824601815,59,21,38
+High (1.5-2.0),ssimulacra2,jpegli-420,jpegli-444,chroma_complexity,-0.23730898258769853,0.07033424175238677,59,21,38
+High (1.5-2.0),ssimulacra2,jpegli-420,jpegli-444,uniform_block_fraction,-0.1922681265092459,0.144595037456061,59,21,38
+High (1.5-2.0),ssimulacra2,jpegli-420,mozjpeg-444,variance,0.051176408595818255,0.7920547042450042,29,21,8
+High (1.5-2.0),ssimulacra2,jpegli-420,mozjpeg-444,edge_density,0.2000595564497791,0.29809376245566277,29,21,8
+High (1.5-2.0),ssimulacra2,jpegli-420,mozjpeg-444,chroma_complexity,-0.4523603671285641,0.013746778444768973,29,21,8
+High (1.5-2.0),ssimulacra2,jpegli-420,mozjpeg-444,uniform_block_fraction,-0.7080516951927821,1.7326260858976902e-05,29,21,8
+High (1.5-2.0),ssimulacra2,mozjpeg-420,mozjpeg-444,variance,0.38657175655947423,0.05108132522806236,26,18,8
+High (1.5-2.0),ssimulacra2,mozjpeg-420,mozjpeg-444,edge_density,0.31779842805720343,0.11362774459502017,26,18,8
+High (1.5-2.0),ssimulacra2,mozjpeg-420,mozjpeg-444,chroma_complexity,-0.6050378882484332,0.001058249832223102,26,18,8
+High (1.5-2.0),ssimulacra2,mozjpeg-420,mozjpeg-444,uniform_block_fraction,-0.7141991840305915,4.169901860570966e-05,26,18,8
+High (1.5-2.0),ssimulacra2,jpegli-444,mozjpeg-420,variance,-0.11664550106101676,0.39192295287399825,56,38,18
+High (1.5-2.0),ssimulacra2,jpegli-444,mozjpeg-420,edge_density,-0.3585628228646157,0.00665573886542917,56,38,18
+High (1.5-2.0),ssimulacra2,jpegli-444,mozjpeg-420,chroma_complexity,0.35641014378313307,0.007014825873015071,56,38,18
+High (1.5-2.0),ssimulacra2,jpegli-444,mozjpeg-420,uniform_block_fraction,0.17706099744831802,0.19173599186722418,56,38,18
+High (1.5-2.0),ssimulacra2,jpegli-444,mozjpeg-444,variance,0.17564391259920561,0.24297037080977166,46,38,8
+High (1.5-2.0),ssimulacra2,jpegli-444,mozjpeg-444,edge_density,0.1462451180005083,0.3321397834220804,46,38,8
+High (1.5-2.0),ssimulacra2,jpegli-444,mozjpeg-444,chroma_complexity,-0.21225591521042877,0.15672681391096713,46,38,8
+High (1.5-2.0),ssimulacra2,jpegli-444,mozjpeg-444,uniform_block_fraction,-0.46653884587404904,0.001082477462500171,46,38,8
+High (1.5-2.0),butteraugli,jpegli-420,jpegli-444,variance,-0.03257201221570817,0.7814594107981547,75,19,56
+High (1.5-2.0),butteraugli,jpegli-420,jpegli-444,edge_density,0.26642182206227333,0.020862861842096007,75,19,56
+High (1.5-2.0),butteraugli,jpegli-420,jpegli-444,chroma_complexity,-0.3664269259876491,0.0012236995940908453,75,19,56
+High (1.5-2.0),butteraugli,jpegli-420,jpegli-444,uniform_block_fraction,-0.13197343049780597,0.25903621697899476,75,19,56
+High (1.5-2.0),butteraugli,jpegli-420,mozjpeg-444,variance,0.11692430536817255,0.5613713320014442,27,19,8
+High (1.5-2.0),butteraugli,jpegli-420,mozjpeg-444,edge_density,0.49446343623672495,0.008747308340951852,27,19,8
+High (1.5-2.0),butteraugli,jpegli-420,mozjpeg-444,chroma_complexity,-0.6230625436473947,0.0005176809383526086,27,19,8
+High (1.5-2.0),butteraugli,jpegli-420,mozjpeg-444,uniform_block_fraction,-0.8149504275268957,2.2729921394201775e-07,27,19,8
+High (1.5-2.0),butteraugli,jpegli-420,mozjpeg-420,variance,0.047322727324981766,0.8385922557029839,21,19,2
+High (1.5-2.0),butteraugli,jpegli-420,mozjpeg-420,edge_density,-0.17563083751606445,0.44635415400764294,21,19,2
+High (1.5-2.0),butteraugli,jpegli-420,mozjpeg-420,chroma_complexity,-0.5205579528662239,0.015547894245480493,21,19,2
+High (1.5-2.0),butteraugli,jpegli-420,mozjpeg-420,uniform_block_fraction,-0.3920426920373186,0.07879737833306621,21,19,2
+High (1.5-2.0),butteraugli,jpegli-444,mozjpeg-444,variance,0.10765635040912641,0.3971395141653138,64,56,8
+High (1.5-2.0),butteraugli,jpegli-444,mozjpeg-444,edge_density,0.46654266534682454,0.00010200008090553315,64,56,8
+High (1.5-2.0),butteraugli,jpegli-444,mozjpeg-444,chroma_complexity,-0.15305477454402355,0.22726472574455095,64,56,8
+High (1.5-2.0),butteraugli,jpegli-444,mozjpeg-444,uniform_block_fraction,-0.5782867491349297,5.604439665966734e-07,64,56,8
+High (1.5-2.0),butteraugli,jpegli-444,mozjpeg-420,variance,0.041938532736312054,0.7546004651678326,58,56,2
+High (1.5-2.0),butteraugli,jpegli-444,mozjpeg-420,edge_density,-0.3487086366856041,0.007304181129356405,58,56,2
+High (1.5-2.0),butteraugli,jpegli-444,mozjpeg-420,chroma_complexity,-0.11577062031761437,0.3868167033700232,58,56,2
+High (1.5-2.0),butteraugli,jpegli-444,mozjpeg-420,uniform_block_fraction,-0.16219041365801343,0.22383649412948953,58,56,2
+High (1.5-2.0),butteraugli,mozjpeg-420,mozjpeg-444,variance,0.046421292537223026,0.89867196620186,10,2,8
+High (1.5-2.0),butteraugli,mozjpeg-420,mozjpeg-444,edge_density,0.6972128875905693,0.025024407920203107,10,2,8
+High (1.5-2.0),butteraugli,mozjpeg-420,mozjpeg-444,chroma_complexity,0.061235087660090406,0.8665494004036278,10,2,8
+High (1.5-2.0),butteraugli,mozjpeg-420,mozjpeg-444,uniform_block_fraction,-0.39303015978917166,0.261198525075703,10,2,8
+Very High (2.0-3.0),ssimulacra2,jpegli-444,mozjpeg-420,variance,0.06292387791040119,0.6675430537499829,49,41,8
+Very High (2.0-3.0),ssimulacra2,jpegli-444,mozjpeg-420,edge_density,-0.23471045208599178,0.10451976973376988,49,41,8
+Very High (2.0-3.0),ssimulacra2,jpegli-444,mozjpeg-420,chroma_complexity,0.18423073372500295,0.20508278926680507,49,41,8
+Very High (2.0-3.0),ssimulacra2,jpegli-444,mozjpeg-420,uniform_block_fraction,0.07982659376732029,0.5855937609517855,49,41,8
+Very High (2.0-3.0),ssimulacra2,jpegli-444,mozjpeg-444,variance,0.2623494216731784,0.04866724412607872,57,41,16
+Very High (2.0-3.0),ssimulacra2,jpegli-444,mozjpeg-444,edge_density,0.15361054607552965,0.25394184744405657,57,41,16
+Very High (2.0-3.0),ssimulacra2,jpegli-444,mozjpeg-444,chroma_complexity,-0.14872912249110046,0.269524590279558,57,41,16
+Very High (2.0-3.0),ssimulacra2,jpegli-444,mozjpeg-444,uniform_block_fraction,-0.4955722839496554,8.869719911522176e-05,57,41,16
+Very High (2.0-3.0),ssimulacra2,mozjpeg-420,mozjpeg-444,variance,0.25796453250400064,0.22359349181055438,24,8,16
+Very High (2.0-3.0),ssimulacra2,mozjpeg-420,mozjpeg-444,edge_density,0.3109662076105085,0.13912753313477527,24,8,16
+Very High (2.0-3.0),ssimulacra2,mozjpeg-420,mozjpeg-444,chroma_complexity,-0.3618920922006997,0.08226110363230646,24,8,16
+Very High (2.0-3.0),ssimulacra2,mozjpeg-420,mozjpeg-444,uniform_block_fraction,-0.49511612991865234,0.013896738728382853,24,8,16
+Very High (2.0-3.0),ssimulacra2,jpegli-420,jpegli-444,variance,-0.4065248210712307,0.0012680739091453328,60,19,41
+Very High (2.0-3.0),ssimulacra2,jpegli-420,jpegli-444,edge_density,0.1673810089580817,0.2011457910281127,60,19,41
+Very High (2.0-3.0),ssimulacra2,jpegli-420,jpegli-444,chroma_complexity,-0.29265168209056097,0.023261494545285637,60,19,41
+Very High (2.0-3.0),ssimulacra2,jpegli-420,jpegli-444,uniform_block_fraction,-0.1957004348284296,0.1339949147767647,60,19,41
+Very High (2.0-3.0),ssimulacra2,jpegli-420,mozjpeg-420,variance,-0.49566044200741555,0.008560890278261447,27,19,8
+Very High (2.0-3.0),ssimulacra2,jpegli-420,mozjpeg-420,edge_density,-0.04420143188745465,0.8267154544605756,27,19,8
+Very High (2.0-3.0),ssimulacra2,jpegli-420,mozjpeg-420,chroma_complexity,-0.08390191396324212,0.6773567867311343,27,19,8
+Very High (2.0-3.0),ssimulacra2,jpegli-420,mozjpeg-420,uniform_block_fraction,-0.10985320273122125,0.5854377171158346,27,19,8
+Very High (2.0-3.0),ssimulacra2,jpegli-420,mozjpeg-444,variance,-0.20137113995127515,0.24605199604402522,35,19,16
+Very High (2.0-3.0),ssimulacra2,jpegli-420,mozjpeg-444,edge_density,0.23790514090583043,0.16875870948288066,35,19,16
+Very High (2.0-3.0),ssimulacra2,jpegli-420,mozjpeg-444,chroma_complexity,-0.45349355822099835,0.006218521664477231,35,19,16
+Very High (2.0-3.0),ssimulacra2,jpegli-420,mozjpeg-444,uniform_block_fraction,-0.6157964208008406,8.225237774644643e-05,35,19,16
+Very High (2.0-3.0),butteraugli,jpegli-444,mozjpeg-420,variance,0.007072293770376068,0.9543547414470781,68,64,4
+Very High (2.0-3.0),butteraugli,jpegli-444,mozjpeg-420,edge_density,0.21181447820068589,0.08291478705317055,68,64,4
+Very High (2.0-3.0),butteraugli,jpegli-444,mozjpeg-420,chroma_complexity,0.2129004868120099,0.08131295040112634,68,64,4
+Very High (2.0-3.0),butteraugli,jpegli-444,mozjpeg-420,uniform_block_fraction,-0.2614731820043562,0.0312550473504166,68,64,4
+Very High (2.0-3.0),butteraugli,jpegli-444,mozjpeg-444,variance,0.10320681204299158,0.40591214849098955,67,64,3
+Very High (2.0-3.0),butteraugli,jpegli-444,mozjpeg-444,edge_density,0.14674462602286287,0.23602546771420038,67,64,3
+Very High (2.0-3.0),butteraugli,jpegli-444,mozjpeg-444,chroma_complexity,-0.012792797434788917,0.9181636677669622,67,64,3
+Very High (2.0-3.0),butteraugli,jpegli-444,mozjpeg-444,uniform_block_fraction,-0.5713414408523358,4.43439635721159e-07,67,64,3
+Very High (2.0-3.0),butteraugli,jpegli-420,jpegli-444,variance,-0.09999662852682643,0.3868816789800792,77,13,64
+Very High (2.0-3.0),butteraugli,jpegli-420,jpegli-444,edge_density,0.1851339881262002,0.10697489464454313,77,13,64
+Very High (2.0-3.0),butteraugli,jpegli-420,jpegli-444,chroma_complexity,-0.26291717545445753,0.02087947145904142,77,13,64
+Very High (2.0-3.0),butteraugli,jpegli-420,jpegli-444,uniform_block_fraction,-0.020530953680133815,0.8593274957576169,77,13,64
+Very High (2.0-3.0),butteraugli,jpegli-420,mozjpeg-420,variance,-0.10205263776920782,0.6967260314954218,17,13,4
+Very High (2.0-3.0),butteraugli,jpegli-420,mozjpeg-420,edge_density,0.3382881656414513,0.18413894514126578,17,13,4
+Very High (2.0-3.0),butteraugli,jpegli-420,mozjpeg-420,chroma_complexity,0.20581511133080185,0.42806908188207105,17,13,4
+Very High (2.0-3.0),butteraugli,jpegli-420,mozjpeg-420,uniform_block_fraction,-0.4495037350558617,0.0702612139432455,17,13,4
+Very High (2.0-3.0),butteraugli,jpegli-420,mozjpeg-444,variance,0.08669821613090242,0.7495267548929856,16,13,3
+Very High (2.0-3.0),butteraugli,jpegli-420,mozjpeg-444,edge_density,0.26832761803263283,0.31497820801146986,16,13,3
+Very High (2.0-3.0),butteraugli,jpegli-420,mozjpeg-444,chroma_complexity,-0.3740729480354614,0.153476368421858,16,13,3
+Very High (2.0-3.0),butteraugli,jpegli-420,mozjpeg-444,uniform_block_fraction,-0.8269975130394172,7.768188579095842e-05,16,13,3
