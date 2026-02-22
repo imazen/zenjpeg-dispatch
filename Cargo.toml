@@ -31,10 +31,10 @@ rgb = "0.8"
 # Reference implementations (for comparison and fallback)
 mozjpeg-oxide = { path = "../mozjpeg-rs", package = "mozjpeg-rs" }
 # New zenjpeg encoder from jpegli-rs repository (replaces old jpegli-rs crate)
-zenjpeg-encoder = { path = "../jpegli-rs/zenjpeg", package = "zenjpeg" }
+zenjpeg-encoder = { path = "../zenjpeg/zenjpeg", package = "zenjpeg" }
 
 # FFI bindings to C++ jpegli (optional, for verification tests)
-jpegli-internals-sys = { path = "../jpegli-rs/internal/jpegli-internals-sys", optional = true }
+jpegli-internals-sys = { path = "../zenjpeg/internal/jpegli-internals-sys", optional = true }
 
 # GPU-accelerated metrics (optional, requires CUDA installation)
 ssimulacra2-cuda = { path = "../turbo-metrics/crates/ssimulacra2-cuda", optional = true }
