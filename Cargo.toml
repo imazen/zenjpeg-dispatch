@@ -2,7 +2,7 @@
 name = "zenjpeg-dispatch"
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.92.0"
+rust-version = "1.89"
 license = "BSD-3-Clause"
 description = "Dispatcher library for selecting optimal JPEG encoder (mozjpeg vs jpegli) based on image characteristics"
 keywords = ["jpeg", "encoder", "compression", "image", "perceptual"]
