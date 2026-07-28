@@ -24,3 +24,5 @@ reduced_corpus/
 heuristic_outputs/images/
 heuristic_outputs_backup_*/
 *.o
+
+.workongoing
