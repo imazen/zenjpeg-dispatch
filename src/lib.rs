@@ -42,6 +42,14 @@ mod types;
 
 // Encoding pipeline
 mod color;
+/// Dev-only access to the per-pixel colour kernels, for `benches/color.rs`.
+///
+/// NOT public API. `color` is private; this forwards the two full-image
+/// conversions so the bench can measure them without widening the module.
+#[doc(hidden)]
+pub mod __bench_color {
+    pub use crate::color::{convert_rgb_to_ycbcr, deinterleave_ycbcr, rgb_to_ycbcr};
+}
 mod dct;
 mod encode;
 mod entropy;

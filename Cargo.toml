@@ -54,6 +54,7 @@ image = { version = "0.25", optional = true, default-features = false, features 
 webp = { version = "0.3", optional = true }  # WebP encoding/decoding
 
 [dev-dependencies]
+zenbench = "0.1.7"
 # Image I/O
 png = "0.18"
 jpeg-decoder = "0.3"
@@ -109,3 +110,7 @@ rayon = "1.8"
 # [[bench]]
 # name = "pareto"
 # harness = false
+
+[[bench]]
+name = "color"
+harness = false

@@ -47,13 +47,17 @@ pub fn ycbcr_to_rgb(y: u8, cb: u8, cr: u8) -> (u8, u8, u8) {
 pub fn convert_rgb_to_ycbcr(rgb: &[u8], width: usize, height: usize) -> Vec<u8> {
     assert_eq!(rgb.len(), width * height * 3);
 
-    let mut ycbcr = Vec::with_capacity(rgb.len());
+    // Preallocated slice writes, NOT per-element `Vec::push`. push pays a
+    // capacity check per element and blocks vectorization; `vec![]` lowers to
+    // a single calloc so the zero-fill is not an extra pass. See
+    // benches/color.rs.
+    let mut ycbcr = vec![0u8; rgb.len()];
 
-    for chunk in rgb.chunks_exact(3) {
+    for (chunk, out) in rgb.chunks_exact(3).zip(ycbcr.chunks_exact_mut(3)) {
         let (y, cb, cr) = rgb_to_ycbcr(chunk[0], chunk[1], chunk[2]);
-        ycbcr.push(y);
-        ycbcr.push(cb);
-        ycbcr.push(cr);
+        out[0] = y;
+        out[1] = cb;
+        out[2] = cr;
     }
 
     ycbcr
@@ -65,15 +69,19 @@ pub fn deinterleave_ycbcr(
     width: usize,
     height: usize,
 ) -> (Vec<u8>, Vec<u8>, Vec<u8>) {
+    // Preallocated slice writes rather than three per-pixel `Vec::push` calls
+    // (see `convert_rgb_to_ycbcr` above). Deinterleaving three planes from an
+    // interleaved buffer is a shape LLVM can widen once the stores are into
+    // fixed-size slices instead of growable Vecs.
     let pixel_count = width * height;
-    let mut y_plane = Vec::with_capacity(pixel_count);
-    let mut cb_plane = Vec::with_capacity(pixel_count);
-    let mut cr_plane = Vec::with_capacity(pixel_count);
+    let mut y_plane = vec![0u8; pixel_count];
+    let mut cb_plane = vec![0u8; pixel_count];
+    let mut cr_plane = vec![0u8; pixel_count];
 
-    for chunk in ycbcr.chunks_exact(3) {
-        y_plane.push(chunk[0]);
-        cb_plane.push(chunk[1]);
-        cr_plane.push(chunk[2]);
+    for (i, chunk) in ycbcr.chunks_exact(3).enumerate().take(pixel_count) {
+        y_plane[i] = chunk[0];
+        cb_plane[i] = chunk[1];
+        cr_plane[i] = chunk[2];
     }
 
     (y_plane, cb_plane, cr_plane)
