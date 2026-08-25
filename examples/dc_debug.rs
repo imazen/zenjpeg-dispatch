@@ -86,8 +86,8 @@ fn main() {
     for test_value in [0u8, 10, 20, 128] {
         let rgb: Vec<u8> = vec![test_value; 64 * 3];
 
-        let zen = zenjpeg::Encoder::new()
-            .quality(zenjpeg::Quality::Standard(80))
+        let zen = zenjpeg_dispatch::Encoder::new()
+            .quality(zenjpeg_dispatch::Quality::Standard(80))
             .encode_rgb(&rgb, 8, 8)
             .unwrap();
 
@@ -117,8 +117,8 @@ fn main() {
             rgb.push(0); // B
         }
 
-        let zen = zenjpeg::Encoder::new()
-            .quality(zenjpeg::Quality::Standard(80))
+        let zen = zenjpeg_dispatch::Encoder::new()
+            .quality(zenjpeg_dispatch::Quality::Standard(80))
             .encode_rgb(&rgb, 8, 8)
             .unwrap();
 
@@ -172,8 +172,8 @@ fn main() {
         }
     }
 
-    let zen = zenjpeg::Encoder::new()
-        .quality(zenjpeg::Quality::Standard(80))
+    let zen = zenjpeg_dispatch::Encoder::new()
+        .quality(zenjpeg_dispatch::Quality::Standard(80))
         .encode_rgb(&rgb_grad, 8, 8)
         .unwrap();
 
@@ -229,13 +229,13 @@ fn main() {
         }
     }
 
-    let zen16 = zenjpeg::Encoder::new()
-        .quality(zenjpeg::Quality::Standard(80))
+    let zen16 = zenjpeg_dispatch::Encoder::new()
+        .quality(zenjpeg_dispatch::Quality::Standard(80))
         .encode_rgb(&rgb16, width, height)
         .unwrap();
 
-    let zen16_fast = zenjpeg::Encoder::fastest()
-        .quality(zenjpeg::Quality::Standard(80))
+    let zen16_fast = zenjpeg_dispatch::Encoder::fastest()
+        .quality(zenjpeg_dispatch::Quality::Standard(80))
         .encode_rgb(&rgb16, width, height)
         .unwrap();
 
@@ -298,8 +298,8 @@ fn main() {
         }
     }
 
-    let zen64 = zenjpeg::Encoder::new()
-        .quality(zenjpeg::Quality::Standard(80))
+    let zen64 = zenjpeg_dispatch::Encoder::new()
+        .quality(zenjpeg_dispatch::Quality::Standard(80))
         .encode_rgb(&rgb64, width, height)
         .unwrap();
 

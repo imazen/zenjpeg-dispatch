@@ -15,7 +15,7 @@ mod common;
 
 use std::fs::File;
 use std::path::Path;
-use zenjpeg::{Encoder, Quality};
+use zenjpeg_dispatch::{Encoder, Quality};
 
 /// Quality levels to test
 const QUALITY_LEVELS: [u8; 5] = [30, 50, 70, 85, 95];

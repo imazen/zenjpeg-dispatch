@@ -1,4 +1,4 @@
-use zenjpeg::{Encoder, Quality};
+use zenjpeg_dispatch::{Encoder, Quality};
 
 fn main() {
     // Simple 16x16 gradient

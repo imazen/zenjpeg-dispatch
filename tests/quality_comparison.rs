@@ -2,7 +2,7 @@
 
 use dssim::Dssim;
 use rgb::RGBA8;
-use zenjpeg::{Encoder, Quality};
+use zenjpeg_dispatch::{Encoder, Quality};
 
 /// Convert RGB bytes to RGBA for DSSIM
 fn rgb_to_rgba(rgb: &[u8]) -> Vec<RGBA8> {

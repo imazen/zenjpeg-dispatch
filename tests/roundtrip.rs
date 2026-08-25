@@ -1,6 +1,6 @@
 //! Roundtrip encoding/decoding tests for zenjpeg
 
-use zenjpeg::{Encoder, Quality};
+use zenjpeg_dispatch::{Encoder, Quality};
 
 /// Create a simple gradient test image
 fn create_gradient_image(width: usize, height: usize) -> Vec<u8> {

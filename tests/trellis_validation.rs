@@ -8,7 +8,7 @@ mod common;
 use dssim::Dssim;
 use std::fs::File;
 use std::path::{Path, PathBuf};
-use zenjpeg::{Encoder, Quality, ScanScript};
+use zenjpeg_dispatch::{Encoder, Quality, ScanScript};
 
 /// Get a test image path - try corpus first, fall back to creating synthetic
 fn get_test_image() -> Option<(Vec<u8>, u32, u32)> {

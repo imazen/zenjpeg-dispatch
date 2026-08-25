@@ -12,8 +12,8 @@
 
 mod common;
 
-use zenjpeg::adaptive_quant::{AdaptiveQuantConfig, AqField};
-use zenjpeg::{Encoder, Quality};
+use zenjpeg_dispatch::adaptive_quant::{AdaptiveQuantConfig, AqField};
+use zenjpeg_dispatch::{Encoder, Quality};
 
 /// Test that AQ field values are in the expected range.
 /// The multiplier values should be around 1.0 (0.5 to 1.5 range).
@@ -192,7 +192,7 @@ fn test_quality_affects_size() {
 /// Test smooth blocks get higher AQ multiplier (more compression).
 #[test]
 fn test_smooth_blocks_higher_multiplier() {
-    use zenjpeg::adaptive_quant::compute_aq_field;
+    use zenjpeg_dispatch::adaptive_quant::compute_aq_field;
 
     // Create a uniform (smooth) image
     let smooth_image: Vec<u8> = vec![128; 64 * 64];
@@ -216,7 +216,7 @@ fn test_smooth_blocks_higher_multiplier() {
 /// Test high-detail blocks get lower AQ multiplier (less compression).
 #[test]
 fn test_detailed_blocks_lower_multiplier() {
-    use zenjpeg::adaptive_quant::compute_aq_field;
+    use zenjpeg_dispatch::adaptive_quant::compute_aq_field;
 
     // Create a high-contrast checkerboard pattern
     let mut detailed_image = Vec::with_capacity(64 * 64);
@@ -248,7 +248,7 @@ fn test_detailed_blocks_lower_multiplier() {
 /// Test AQ field dimensions are correct.
 #[test]
 fn test_aq_field_dimensions() {
-    use zenjpeg::adaptive_quant::compute_aq_field;
+    use zenjpeg_dispatch::adaptive_quant::compute_aq_field;
 
     let config = AdaptiveQuantConfig {
         enabled: true,
@@ -286,7 +286,7 @@ fn test_aq_field_dimensions() {
 /// Test that AQ disabled returns uniform field.
 #[test]
 fn test_aq_disabled_uniform() {
-    use zenjpeg::adaptive_quant::compute_aq_field;
+    use zenjpeg_dispatch::adaptive_quant::compute_aq_field;
 
     let config = AdaptiveQuantConfig {
         enabled: false,

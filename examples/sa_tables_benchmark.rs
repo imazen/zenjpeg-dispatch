@@ -11,7 +11,7 @@ use codec_eval::{
 use mozjpeg_oxide::Preset;
 use std::fs;
 use std::path::PathBuf;
-use zenjpeg::sa_tables::{
+use zenjpeg_dispatch::sa_tables::{
     get_interpolated_sa_table, select_sa_table, select_sa_table_compress, SA_LUMA_Q35,
     SA_LUMA_Q35_COMPRESS, SA_LUMA_Q50, SA_LUMA_Q50_COMPRESS, SA_LUMA_Q75, SA_LUMA_Q75_COMPRESS,
     SA_LUMA_Q95,

@@ -2,7 +2,7 @@
 //!
 //! This helps identify where the quality divergence occurs.
 
-use zenjpeg::{Encoder, Quality};
+use zenjpeg_dispatch::{Encoder, Quality};
 
 fn main() {
     // Test on larger, more complex image (512x512 synthetic)

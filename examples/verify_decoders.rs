@@ -8,7 +8,7 @@
 //! Run with: cargo run --example verify_decoders
 
 use std::process::Command;
-use zenjpeg::{Encoder, Quality, ScanInfo, ScanScript};
+use zenjpeg_dispatch::{Encoder, Quality, ScanInfo, ScanScript};
 
 struct DecoderResult {
     name: &'static str,

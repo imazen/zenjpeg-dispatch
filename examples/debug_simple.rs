@@ -1,5 +1,5 @@
 use std::io::Write;
-use zenjpeg::{Encoder, Quality, ScanScript};
+use zenjpeg_dispatch::{Encoder, Quality, ScanScript};
 
 fn main() {
     let width = 16usize;

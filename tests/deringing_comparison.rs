@@ -3,8 +3,8 @@
 //! Evaluates the impact of overshoot deringing on compression and quality
 //! using different image types.
 
-use zenjpeg::analysis::should_use_deringing;
-use zenjpeg::{Encoder, Quality};
+use zenjpeg_dispatch::analysis::should_use_deringing;
+use zenjpeg_dispatch::{Encoder, Quality};
 
 /// Test that deringing can be explicitly enabled/disabled
 #[test]
@@ -105,14 +105,14 @@ fn test_deringing_auto_selection() {
     // With mozjpeg strategy (should auto-enable deringing)
     let encoder = Encoder::new()
         .quality(Quality::Standard(60)) // Lower quality typically uses mozjpeg
-        .strategy(zenjpeg::EncodingStrategy::Mozjpeg);
+        .strategy(zenjpeg_dispatch::EncodingStrategy::Mozjpeg);
     let result = encoder.encode_rgb(&pixels, width, height);
     assert!(result.is_ok(), "Mozjpeg encoding should succeed");
 
     // With jpegli strategy (should auto-disable deringing)
     let encoder = Encoder::new()
         .quality(Quality::Standard(85))
-        .strategy(zenjpeg::EncodingStrategy::Jpegli);
+        .strategy(zenjpeg_dispatch::EncodingStrategy::Jpegli);
     let result = encoder.encode_rgb(&pixels, width, height);
     assert!(result.is_ok(), "Jpegli encoding should succeed");
 }

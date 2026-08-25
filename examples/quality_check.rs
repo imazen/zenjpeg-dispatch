@@ -16,7 +16,7 @@ fn main() {
 
     println!("Direct mozjpeg-oxide (default settings):");
     for q in [30u8, 50, 70, 85, 95] {
-        let jpeg = mozjpeg_oxide::Encoder::new()
+        let jpeg = mozjpeg_oxide::Encoder::new(mozjpeg_oxide::Preset::default())
             .quality(q)
             .encode_rgb(&rgb, width as u32, height as u32)
             .unwrap();
@@ -26,8 +26,8 @@ fn main() {
     println!("\nDirect mozjpeg-oxide (matching zenjpeg settings):");
     for q in [30u8, 50, 70, 85, 95] {
         // Match zenjpeg's settings: 4:4:4, Huffman opt, deringing based on image
-        let use_deringing = zenjpeg::analysis::should_use_deringing(&rgb, width, height);
-        let jpeg = mozjpeg_oxide::Encoder::new()
+        let use_deringing = zenjpeg_dispatch::analysis::should_use_deringing(&rgb, width, height);
+        let jpeg = mozjpeg_oxide::Encoder::new(mozjpeg_oxide::Preset::ProgressiveBalanced)
             .quality(q)
             .subsampling(mozjpeg_oxide::Subsampling::S444)
             .optimize_huffman(true)
@@ -44,8 +44,8 @@ fn main() {
 
     println!("\nVia zenjpeg delegation:");
     for q in [30u8, 50, 70, 85, 95] {
-        let jpeg = zenjpeg::Encoder::new()
-            .quality(zenjpeg::Quality::Standard(q))
+        let jpeg = zenjpeg_dispatch::Encoder::new()
+            .quality(zenjpeg_dispatch::Quality::Standard(q))
             .encode_rgb(&rgb, width, height)
             .unwrap();
         println!("  Q{}: {} bytes", q, jpeg.len());

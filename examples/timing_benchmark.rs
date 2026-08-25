@@ -1,7 +1,7 @@
 //! Quick timing benchmark for encoding strategies
 
 use std::time::Instant;
-use zenjpeg::{Encoder, EncodingStrategy, Quality};
+use zenjpeg_dispatch::{Encoder, EncodingStrategy, Quality};
 
 fn main() {
     // Create test images of different sizes

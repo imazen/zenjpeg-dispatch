@@ -45,8 +45,8 @@ fn main() {
     }
 
     // Encode and decode with both
-    let zen = zenjpeg::Encoder::new()
-        .quality(zenjpeg::Quality::Standard(80))
+    let zen = zenjpeg_dispatch::Encoder::new()
+        .quality(zenjpeg_dispatch::Quality::Standard(80))
         .encode_rgb(&gray_rgb, width, height)
         .unwrap();
 
@@ -104,8 +104,8 @@ fn main() {
         red_rgb.push(0); // B = 0
     }
 
-    let zen = zenjpeg::Encoder::new()
-        .quality(zenjpeg::Quality::Standard(80))
+    let zen = zenjpeg_dispatch::Encoder::new()
+        .quality(zenjpeg_dispatch::Quality::Standard(80))
         .encode_rgb(&red_rgb, width, height)
         .unwrap();
 

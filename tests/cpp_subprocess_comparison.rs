@@ -109,7 +109,7 @@ fn test_file_size_comparison() {
         reader.next_frame(&mut pixels).unwrap();
         let info = reader.info();
 
-        let encoder = zenjpeg::Encoder::new().quality(zenjpeg::Quality::Standard(quality));
+        let encoder = zenjpeg_dispatch::Encoder::new().quality(zenjpeg_dispatch::Quality::Standard(quality));
 
         let rust_jpeg = match encoder.encode_rgb(&pixels, info.width as usize, info.height as usize)
         {
@@ -167,7 +167,7 @@ fn test_both_produce_valid_jpeg() {
     reader.next_frame(&mut pixels).unwrap();
     let info = reader.info();
 
-    let encoder = zenjpeg::Encoder::new().quality(zenjpeg::Quality::Standard(85));
+    let encoder = zenjpeg_dispatch::Encoder::new().quality(zenjpeg_dispatch::Quality::Standard(85));
     let rust_jpeg = encoder
         .encode_rgb(&pixels, info.width as usize, info.height as usize)
         .expect("zenjpeg should succeed");

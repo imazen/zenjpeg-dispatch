@@ -17,8 +17,8 @@ fn main() {
     let q = 80;
 
     // Encode with both
-    let zen = zenjpeg::Encoder::new()
-        .quality(zenjpeg::Quality::Standard(q))
+    let zen = zenjpeg_dispatch::Encoder::new()
+        .quality(zenjpeg_dispatch::Quality::Standard(q))
         .encode_rgb(&rgb, width, height)
         .unwrap();
 

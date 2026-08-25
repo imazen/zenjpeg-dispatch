@@ -195,18 +195,18 @@ fn main() {
 
     // Encode with standard zenjpeg (mozjpeg strategy)
     let start = Instant::now();
-    let mozjpeg_result = zenjpeg::Encoder::new()
-        .quality(zenjpeg::Quality::Standard(quality))
-        .strategy(zenjpeg::EncodingStrategy::Mozjpeg)
+    let mozjpeg_result = zenjpeg_dispatch::Encoder::new()
+        .quality(zenjpeg_dispatch::Quality::Standard(quality))
+        .strategy(zenjpeg_dispatch::EncodingStrategy::Mozjpeg)
         .encode_rgb(&pixels, width, height)
         .unwrap();
     let mozjpeg_time = start.elapsed();
 
     // Encode with jpegli
     let start = Instant::now();
-    let jpegli_result = zenjpeg::Encoder::new()
-        .quality(zenjpeg::Quality::Standard(quality))
-        .strategy(zenjpeg::EncodingStrategy::Jpegli)
+    let jpegli_result = zenjpeg_dispatch::Encoder::new()
+        .quality(zenjpeg_dispatch::Quality::Standard(quality))
+        .strategy(zenjpeg_dispatch::EncodingStrategy::Jpegli)
         .encode_rgb(&pixels, width, height)
         .unwrap();
     let jpegli_time = start.elapsed();

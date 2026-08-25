@@ -51,16 +51,16 @@ fn main() {
 
     for q in [30, 40, 50, 60, 70, 75, 80, 85, 90, 95] {
         // zenjpeg with mozjpeg strategy
-        let zen_moz = zenjpeg::Encoder::new()
-            .quality(zenjpeg::Quality::Standard(q))
-            .strategy(zenjpeg::EncodingStrategy::Mozjpeg)
+        let zen_moz = zenjpeg_dispatch::Encoder::new()
+            .quality(zenjpeg_dispatch::Quality::Standard(q))
+            .strategy(zenjpeg_dispatch::EncodingStrategy::Mozjpeg)
             .encode_rgb(&rgb_data, width, height)
             .unwrap();
 
         // zenjpeg with jpegli strategy
-        let zen_jpegli = zenjpeg::Encoder::new()
-            .quality(zenjpeg::Quality::Standard(q))
-            .strategy(zenjpeg::EncodingStrategy::Jpegli)
+        let zen_jpegli = zenjpeg_dispatch::Encoder::new()
+            .quality(zenjpeg_dispatch::Quality::Standard(q))
+            .strategy(zenjpeg_dispatch::EncodingStrategy::Jpegli)
             .encode_rgb(&rgb_data, width, height)
             .unwrap();
 
@@ -141,9 +141,9 @@ fn main() {
     let mut all_points: Vec<(&str, u8, f64, f64)> = Vec::new();
 
     for q in [30, 40, 50, 60, 70, 75, 80, 85, 90, 95] {
-        let zen_jpegli = zenjpeg::Encoder::new()
-            .quality(zenjpeg::Quality::Standard(q))
-            .strategy(zenjpeg::EncodingStrategy::Jpegli)
+        let zen_jpegli = zenjpeg_dispatch::Encoder::new()
+            .quality(zenjpeg_dispatch::Quality::Standard(q))
+            .strategy(zenjpeg_dispatch::EncodingStrategy::Jpegli)
             .encode_rgb(&rgb_data, width, height)
             .unwrap();
 

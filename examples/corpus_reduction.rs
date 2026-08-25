@@ -15,7 +15,7 @@ use rgb::RGBA8;
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-use zenjpeg::{Encoder, Quality};
+use zenjpeg_dispatch::{Encoder, Quality};
 
 /// Quality levels to sample for curve generation
 const QUALITY_LEVELS: [u8; 5] = [20, 40, 60, 80, 95];

@@ -2,7 +2,7 @@
 
 use dssim::Dssim;
 use rgb::RGBA8;
-use zenjpeg::{Encoder, Quality};
+use zenjpeg_dispatch::{Encoder, Quality};
 
 fn main() {
     let width = 256;
