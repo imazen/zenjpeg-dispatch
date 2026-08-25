@@ -1,5 +1,14 @@
 # zenjpeg-dispatch
 
+> **This repository is archived and no longer developed.**
+>
+> Encoder selection now happens through the picker stack — see
+> [`zenpredict`/`zenpicker`](https://github.com/imazen/zenanalyze) for
+> per-codec and cross-codec selection, and
+> [imazen/zenjpeg](https://github.com/imazen/zenjpeg) for JPEG encoding itself.
+>
+> This repository no longer accepts issues or pull requests.
+
 Dispatcher library for selecting optimal JPEG encoder based on image characteristics.
 
 Intelligently selects between mozjpeg and jpegli encoders based on target quality and image content to achieve Pareto-optimal compression.
