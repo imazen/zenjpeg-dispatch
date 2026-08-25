@@ -50,7 +50,7 @@ fn main() {
         .encode_rgb(&gray_rgb, width, height)
         .unwrap();
 
-    let moz = mozjpeg_oxide::Encoder::new()
+    let moz = mozjpeg_oxide::Encoder::new(mozjpeg_oxide::Preset::default())
         .quality(80)
         .subsampling(mozjpeg_oxide::Subsampling::S444)
         .encode_rgb(&gray_rgb, width as u32, height as u32)
@@ -109,7 +109,7 @@ fn main() {
         .encode_rgb(&red_rgb, width, height)
         .unwrap();
 
-    let moz = mozjpeg_oxide::Encoder::new()
+    let moz = mozjpeg_oxide::Encoder::new(mozjpeg_oxide::Preset::default())
         .quality(80)
         .subsampling(mozjpeg_oxide::Subsampling::S444)
         .encode_rgb(&red_rgb, width as u32, height as u32)

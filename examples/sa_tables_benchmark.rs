@@ -128,15 +128,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let height = image.height() as u32;
             let quality = request.quality as f32;
 
-            let encoder = jpegli::Encoder::new()
-                .width(width)
-                .height(height)
-                .pixel_format(jpegli::PixelFormat::Rgb)
-                .jpegli_quality(jpegli::Quality::Traditional(quality));
-            encoder.encode(&rgb).map_err(|e| codec_eval::Error::Codec {
+            // The standalone `jpegli` crate no longer exists; its Rust port now
+            // lives in the `zenjpeg` crate, depended on here as `zenjpeg_encoder`.
+            use zenjpeg_encoder::encoder::{
+                ChromaSubsampling, EncoderConfig, PixelLayout, Unstoppable,
+            };
+
+            let to_err = |e: zenjpeg_encoder::encoder::Error| codec_eval::Error::Codec {
                 codec: "jpegli".to_string(),
                 message: e.to_string(),
-            })
+            };
+
+            let config = EncoderConfig::ycbcr(quality, ChromaSubsampling::None);
+            let mut encoder = config
+                .encode_from_bytes(width, height, PixelLayout::Rgb8Srgb)
+                .map_err(to_err)?;
+            encoder.push_packed(&rgb, Unstoppable).map_err(to_err)?;
+            encoder.finish().map_err(to_err)
         }),
         jpeg_decode_callback(),
     );
@@ -172,9 +180,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let img_name = img_path.file_stem().unwrap().to_string_lossy();
 
         // Load PNG
-        let decoder = png::Decoder::new(fs::File::open(img_path)?);
+        let decoder = png::Decoder::new(std::io::BufReader::new(fs::File::open(img_path)?));
         let mut reader = decoder.read_info()?;
-        let mut buf = vec![0; reader.output_buffer_size()];
+        let mut buf = vec![0; reader.output_buffer_size().expect("PNG output buffer size overflows usize")];
         let info = reader.next_frame(&mut buf)?;
         let bytes = &buf[..info.buffer_size()];
 

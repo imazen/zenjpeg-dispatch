@@ -6,7 +6,50 @@
 //! - reference jpegli
 //! - reference mozjpeg
 
-use butteraugli::{compute_butteraugli, ButteraugliParams};
+use butteraugli::{butteraugli, ButteraugliError, ButteraugliParams, ButteraugliResult, Img, RGB8};
+
+/// Adapter over the current `butteraugli` API, which takes `ImgRef<RGB8>` rather
+/// than the flat RGB byte slices this example works with.
+fn compute_butteraugli(
+    orig: &[u8],
+    decoded: &[u8],
+    width: usize,
+    height: usize,
+    params: &ButteraugliParams,
+) -> Result<ButteraugliResult, ButteraugliError> {
+    let to_rgb = |bytes: &[u8]| -> Vec<RGB8> {
+        bytes
+            .chunks_exact(3)
+            .map(|c| RGB8::new(c[0], c[1], c[2]))
+            .collect()
+    };
+
+    let orig_img = Img::new(to_rgb(orig), width, height);
+    let dec_img = Img::new(to_rgb(decoded), width, height);
+
+    butteraugli(orig_img.as_ref(), dec_img.as_ref(), params)
+}
+
+/// Encode with the zenjpeg encoder crate directly (the "reference jpegli" column).
+///
+/// The standalone `jpegli` crate this example used to call no longer exists; its
+/// Rust port now lives in the `zenjpeg` crate, which this crate depends on as
+/// `zenjpeg_encoder`. 4:4:4 YCbCr is used so the output decodes correctly through
+/// `jpeg_decoder` below, which does no ICC handling.
+fn encode_reference_jpegli(
+    rgb: &[u8],
+    width: usize,
+    height: usize,
+    quality: f32,
+) -> Result<Vec<u8>, zenjpeg_encoder::encoder::Error> {
+    use zenjpeg_encoder::encoder::{ChromaSubsampling, EncoderConfig, PixelLayout, Unstoppable};
+
+    let config = EncoderConfig::ycbcr(quality, ChromaSubsampling::None);
+    let mut encoder =
+        config.encode_from_bytes(width as u32, height as u32, PixelLayout::Rgb8Srgb)?;
+    encoder.push_packed(rgb, Unstoppable)?;
+    encoder.finish()
+}
 
 fn main() {
     // Create synthetic test image
@@ -65,12 +108,7 @@ fn main() {
             .unwrap();
 
         // jpegli (Rust port)
-        let jpegli_result = jpegli::Encoder::new()
-            .width(width as u32)
-            .height(height as u32)
-            .pixel_format(jpegli::PixelFormat::Rgb)
-            .quality(jpegli::Quality::Traditional(q as f32))
-            .encode(&rgb_data);
+        let jpegli_result = encode_reference_jpegli(&rgb_data, width, height, q as f32);
 
         let jpegli_bytes = match jpegli_result {
             Ok(b) => b,
@@ -81,7 +119,7 @@ fn main() {
         };
 
         // mozjpeg-oxide
-        let moz = mozjpeg_oxide::Encoder::new()
+        let moz = mozjpeg_oxide::Encoder::new(mozjpeg_oxide::Preset::default())
             .quality(q)
             .subsampling(mozjpeg_oxide::Subsampling::S444)
             .encode_rgb(&rgb_data, width as u32, height as u32)
@@ -147,15 +185,9 @@ fn main() {
             .encode_rgb(&rgb_data, width, height)
             .unwrap();
 
-        let jpegli_bytes = jpegli::Encoder::new()
-            .width(width as u32)
-            .height(height as u32)
-            .pixel_format(jpegli::PixelFormat::Rgb)
-            .quality(jpegli::Quality::Traditional(q as f32))
-            .encode(&rgb_data)
-            .unwrap();
+        let jpegli_bytes = encode_reference_jpegli(&rgb_data, width, height, q as f32).unwrap();
 
-        let moz = mozjpeg_oxide::Encoder::new()
+        let moz = mozjpeg_oxide::Encoder::new(mozjpeg_oxide::Preset::default())
             .quality(q)
             .subsampling(mozjpeg_oxide::Subsampling::S444)
             .encode_rgb(&rgb_data, width as u32, height as u32)

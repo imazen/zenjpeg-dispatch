@@ -177,9 +177,9 @@ fn load_or_create_natural_image() -> (Vec<u8>, usize, usize) {
 /// Load a PNG image
 fn load_png(path: &Path) -> Option<(Vec<u8>, usize, usize)> {
     let file = File::open(path).ok()?;
-    let decoder = png::Decoder::new(file);
+    let decoder = png::Decoder::new(std::io::BufReader::new(file));
     let mut reader = decoder.read_info().ok()?;
-    let mut buf = vec![0; reader.output_buffer_size()];
+    let mut buf = vec![0; reader.output_buffer_size().expect("PNG output buffer size overflows usize")];
     let info = reader.next_frame(&mut buf).ok()?;
     let bytes = &buf[..info.buffer_size()];
 

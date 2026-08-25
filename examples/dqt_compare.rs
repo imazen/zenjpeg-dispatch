@@ -22,7 +22,7 @@ fn main() {
         .encode_rgb(&rgb, width, height)
         .unwrap();
 
-    let moz = mozjpeg_oxide::Encoder::new()
+    let moz = mozjpeg_oxide::Encoder::new(mozjpeg_oxide::Preset::default())
         .quality(q)
         .subsampling(mozjpeg_oxide::Subsampling::S444)
         .encode_rgb(&rgb, width as u32, height as u32)

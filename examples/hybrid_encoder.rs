@@ -8,11 +8,14 @@
 
 use std::time::Instant;
 
-// Access jpegli's adaptive quantization (marked #[doc(hidden)] but pub)
-use jpegli::adaptive_quant::compute_aq_strength_map;
+// This crate's own port of jpegli's adaptive quantization. The upstream
+// `zenjpeg` encoder keeps its `quant` module private (it is only `pub` behind
+// the internal `__test-utils` feature), so the port that ships here is the
+// reachable one.
+use zenjpeg_dispatch::adaptive_quant::{compute_aq_strength_map, AdaptiveQuantConfig};
 
 /// Convert RGB to Y plane (luminance only, for AQ analysis)
-fn rgb_to_y_plane(rgb: &[u8], width: usize, height: usize) -> Vec<f32> {
+fn rgb_to_y_plane(rgb: &[u8], width: usize, height: usize) -> Vec<u8> {
     let mut y_plane = Vec::with_capacity(width * height);
     for i in 0..(width * height) {
         let r = rgb[i * 3] as f32;
@@ -20,7 +23,7 @@ fn rgb_to_y_plane(rgb: &[u8], width: usize, height: usize) -> Vec<f32> {
         let b = rgb[i * 3 + 2] as f32;
         // BT.601 luma
         let y = 0.299 * r + 0.587 * g + 0.114 * b;
-        y_plane.push(y);
+        y_plane.push(y.round().clamp(0.0, 255.0) as u8);
     }
     y_plane
 }
@@ -125,7 +128,11 @@ fn main() {
     // Step 2: Compute AQ strength map using jpegli's algorithm
     let start = Instant::now();
     let y_quant_01 = base_quant[1]; // First AC coefficient quant value
-    let aq_map = compute_aq_strength_map(&y_plane, width, height, y_quant_01);
+    let aq_config = AdaptiveQuantConfig {
+        enabled: true,
+        strength: 1.0,
+    };
+    let aq_map = compute_aq_strength_map(&y_plane, width, height, y_quant_01, &aq_config);
     println!("2. Compute AQ map: {:?}", start.elapsed());
 
     // Analyze AQ map

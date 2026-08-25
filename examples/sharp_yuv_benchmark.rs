@@ -235,9 +235,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("\n[{}/{}] Processing: {}", i + 1, test_images.len(), name);
 
             // Load PNG
-            let decoder = png::Decoder::new(fs::File::open(path)?);
+            let decoder = png::Decoder::new(std::io::BufReader::new(fs::File::open(path)?));
             let mut reader = decoder.read_info()?;
-            let mut buf = vec![0; reader.output_buffer_size()];
+            let mut buf = vec![0; reader.output_buffer_size().expect("PNG output buffer size overflows usize")];
             let info = reader.next_frame(&mut buf)?;
             let bytes = &buf[..info.buffer_size()];
 

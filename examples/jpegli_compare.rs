@@ -3,6 +3,27 @@
 use dssim::Dssim;
 use rgb::RGB8;
 
+/// Encode with the zenjpeg encoder crate directly (the "reference jpegli" column).
+///
+/// The standalone `jpegli` crate this example used to call no longer exists; its
+/// Rust port now lives in the `zenjpeg` crate, which this crate depends on as
+/// `zenjpeg_encoder`. 4:4:4 YCbCr is used so the output decodes correctly through
+/// `jpeg_decoder` below, which does no ICC handling.
+fn encode_reference_jpegli(
+    rgb: &[u8],
+    width: usize,
+    height: usize,
+    quality: f32,
+) -> Result<Vec<u8>, zenjpeg_encoder::encoder::Error> {
+    use zenjpeg_encoder::encoder::{ChromaSubsampling, EncoderConfig, PixelLayout, Unstoppable};
+
+    let config = EncoderConfig::ycbcr(quality, ChromaSubsampling::None);
+    let mut encoder =
+        config.encode_from_bytes(width as u32, height as u32, PixelLayout::Rgb8Srgb)?;
+    encoder.push_packed(rgb, Unstoppable)?;
+    encoder.finish()
+}
+
 fn main() {
     // Create synthetic test image
     let width = 512usize;
@@ -41,13 +62,8 @@ fn main() {
             .encode_rgb(&rgb_data, width, height)
             .unwrap();
 
-        // jpegli (Rust port) - uses Traditional quality mode
-        let jpegli_result = jpegli::Encoder::new()
-            .width(width as u32)
-            .height(height as u32)
-            .pixel_format(jpegli::PixelFormat::Rgb)
-            .quality(jpegli::Quality::Traditional(q as f32))
-            .encode(&rgb_data);
+        // jpegli (Rust port, now the zenjpeg encoder crate)
+        let jpegli_result = encode_reference_jpegli(&rgb_data, width, height, q as f32);
 
         let jpegli_bytes = match jpegli_result {
             Ok(b) => b,
@@ -58,7 +74,7 @@ fn main() {
         };
 
         // mozjpeg-oxide for reference
-        let moz = mozjpeg_oxide::Encoder::new()
+        let moz = mozjpeg_oxide::Encoder::new(mozjpeg_oxide::Preset::default())
             .quality(q)
             .subsampling(mozjpeg_oxide::Subsampling::S444)
             .encode_rgb(&rgb_data, width as u32, height as u32)

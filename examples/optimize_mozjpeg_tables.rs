@@ -332,9 +332,9 @@ struct TestImage {
 
 fn load_png(path: &Path) -> Option<TestImage> {
     let file = fs::File::open(path).ok()?;
-    let decoder = png::Decoder::new(file);
+    let decoder = png::Decoder::new(std::io::BufReader::new(file));
     let mut reader = decoder.read_info().ok()?;
-    let mut buf = vec![0; reader.output_buffer_size()];
+    let mut buf = vec![0; reader.output_buffer_size().expect("PNG output buffer size overflows usize")];
     let info = reader.next_frame(&mut buf).ok()?;
 
     let (width, height) = (info.width as usize, info.height as usize);

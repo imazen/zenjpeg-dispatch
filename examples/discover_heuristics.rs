@@ -1230,22 +1230,25 @@ fn encode_jpegli(
     subsampling: Subsampling,
     _xyb_mode: bool,
 ) -> Result<Vec<u8>, String> {
-    use jpegli::{Encoder, Quality, Subsampling as JpegliSubsampling};
+    // The standalone `jpegli` crate no longer exists; its Rust port now lives in
+    // the `zenjpeg` crate, depended on here as `zenjpeg_encoder`.
+    use zenjpeg_encoder::encoder::{ChromaSubsampling, EncoderConfig, PixelLayout, Unstoppable};
 
     let subsamp = match subsampling {
-        Subsampling::S420 | Subsampling::Auto => JpegliSubsampling::S420,
-        Subsampling::S422 => JpegliSubsampling::S422,
-        Subsampling::S444 => JpegliSubsampling::S444,
+        Subsampling::S420 | Subsampling::Auto => ChromaSubsampling::Quarter,
+        Subsampling::S422 => ChromaSubsampling::HalfHorizontal,
+        Subsampling::S444 => ChromaSubsampling::None,
     };
 
-    let encoder = Encoder::new()
-        .width(width as u32)
-        .height(height as u32)
-        .quality(Quality::from_quality(quality as f32))
-        .subsampling(subsamp);
-
+    let config = EncoderConfig::ycbcr(quality as f32, subsamp);
+    let mut encoder = config
+        .encode_from_bytes(width as u32, height as u32, PixelLayout::Rgb8Srgb)
+        .map_err(|e| format!("jpegli encode failed: {:?}", e))?;
     encoder
-        .encode(pixels)
+        .push_packed(pixels, Unstoppable)
+        .map_err(|e| format!("jpegli encode failed: {:?}", e))?;
+    encoder
+        .finish()
         .map_err(|e| format!("jpegli encode failed: {:?}", e))
 }
 
@@ -4238,12 +4241,12 @@ fn prepare_image(
 ) -> Result<(Arc<Vec<u8>>, usize, usize, Arc<ImageAnalysis>, PathBuf), String> {
     // Load image
     let file = fs::File::open(image_path).map_err(|e| format!("Failed to open image: {}", e))?;
-    let decoder = png::Decoder::new(file);
+    let decoder = png::Decoder::new(std::io::BufReader::new(file));
     let mut reader = decoder
         .read_info()
         .map_err(|e| format!("Failed to read PNG info: {}", e))?;
 
-    let mut buf = vec![0; reader.output_buffer_size()];
+    let mut buf = vec![0; reader.output_buffer_size().expect("PNG output buffer size overflows usize")];
     let info = reader
         .next_frame(&mut buf)
         .map_err(|e| format!("Failed to decode PNG: {}", e))?;
@@ -4625,12 +4628,12 @@ fn extract_quality_from_filename(filename: &str) -> u8 {
 /// Load PNG and return (RGB pixels, width, height)
 fn load_png(path: &Path) -> Result<(Vec<u8>, usize, usize), String> {
     let file = fs::File::open(path).map_err(|e| format!("Failed to open: {}", e))?;
-    let decoder = png::Decoder::new(file);
+    let decoder = png::Decoder::new(std::io::BufReader::new(file));
     let mut reader = decoder
         .read_info()
         .map_err(|e| format!("Failed to read PNG info: {}", e))?;
 
-    let mut buf = vec![0; reader.output_buffer_size()];
+    let mut buf = vec![0; reader.output_buffer_size().expect("PNG output buffer size overflows usize")];
     let info = reader
         .next_frame(&mut buf)
         .map_err(|e| format!("Failed to decode PNG: {}", e))?;

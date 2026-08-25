@@ -105,7 +105,7 @@ fn test_file_size_comparison() {
         let png_data = std::fs::read(png_path).unwrap();
         let decoder = png::Decoder::new(std::io::Cursor::new(&png_data));
         let mut reader = decoder.read_info().unwrap();
-        let mut pixels = vec![0u8; reader.output_buffer_size()];
+        let mut pixels = vec![0u8; reader.output_buffer_size().expect("PNG output buffer size overflows usize")];
         reader.next_frame(&mut pixels).unwrap();
         let info = reader.info();
 
@@ -163,7 +163,7 @@ fn test_both_produce_valid_jpeg() {
     let png_data = std::fs::read(png_path).unwrap();
     let decoder = png::Decoder::new(std::io::Cursor::new(&png_data));
     let mut reader = decoder.read_info().unwrap();
-    let mut pixels = vec![0u8; reader.output_buffer_size()];
+    let mut pixels = vec![0u8; reader.output_buffer_size().expect("PNG output buffer size overflows usize")];
     reader.next_frame(&mut pixels).unwrap();
     let info = reader.info();
 

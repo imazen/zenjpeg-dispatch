@@ -81,7 +81,9 @@ mozjpeg-sys = "2.0"
 mozjpeg = "0.10"
 
 # Sharp YUV chroma subsampling
-yuv = "0.8"
+# `professional_mode` gates `YuvConversionMode::Professional`, which the
+# sharp_yuv_benchmark example uses for its highest-precision conversion path.
+yuv = { version = "0.8.16", features = ["professional_mode"] }
 
 # CLI and hashing for benchmark infrastructure
 clap = { version = "4.4", features = ["derive"] }
@@ -114,3 +116,13 @@ rayon = "1.8"
 [[bench]]
 name = "color"
 harness = false
+
+# This example uses cudarse_driver / cudarse_npp / ssimulacra2_cuda unconditionally
+# (not behind any cfg), so it can only be built when the CUDA-backed `gpu` feature
+# supplies those crates. Declaring it here keeps `--all-targets` honest on machines
+# without CUDA instead of failing with unresolved-crate errors.
+# NOTE: it additionally imports a plain `ssimulacra2` crate that is not in this
+# manifest under any feature, so it does not build even with `gpu` enabled.
+[[example]]
+name = "optimize_mozjpeg_tables"
+required-features = ["gpu"]
